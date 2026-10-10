@@ -1,9 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { connect } from "../src/client.mjs";
+import { Fault } from "../src/fault.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+test("malformed UTF-8 token files return the stable input fault before connecting", async () => {
+  const root = await mkdtemp(join(tmpdir(), "relay-token-encoding-"));
+  try {
+    const tokenFile = join(root, "token");
+    await writeFile(tokenFile, Buffer.from([0xff]), { mode: 0o600 });
+    await assert.rejects(connect({ url: "https://127.0.0.1:1", tokenFile }), (error) =>
+      error instanceof Fault && error.code === "input" && error.message === "Token file has invalid contents");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("client and capture token readers reject a writerless FIFO without blocking", { skip: process.platform === "win32" }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "relay-fifo-test-"));

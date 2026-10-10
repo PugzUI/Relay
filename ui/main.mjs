@@ -389,6 +389,7 @@ function renderPane(name) {
   rows.replaceChildren();
   if (!state.selectedBoard) return clearPane(name);
   const status = byId(`${name}-status`);
+  status.dataset.state = "";
   if (pane.loading) status.textContent = "Loading";
   else if (pane.error) { status.textContent = pane.error; status.dataset.state = "error"; }
   else if (page && state.connection !== "connected") {

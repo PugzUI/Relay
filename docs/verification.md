@@ -2,7 +2,7 @@
 
 ## Native execution
 
-The regression suite passed with **95 tests, no failures or skips** on Linux
+The regression suite passed with **96 tests, no failures or skips** on Linux
 with Node.js **24.21.0** and **26.11.1**. Earlier local runs also exercised
 Node.js 26.8.1. `npm run check` passed syntax, the nine public exports, strict
 consumer declarations, required modules, and the actual package-file manifest.

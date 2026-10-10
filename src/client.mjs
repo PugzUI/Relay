@@ -50,7 +50,9 @@ async function readPrivate(path, label, maxBytes) {
 async function readToken(path) {
   const value = await readPrivate(path, "Token file", 45);
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
+    let text;
+    try { text = new TextDecoder("utf-8", { fatal: true }).decode(value); }
+    catch { fail("input", "Token file has invalid contents"); }
     const token = text.endsWith("\n") ? text.slice(0, -1) : text;
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) fail("input", "Token file has invalid contents");
     return token;
@@ -282,10 +284,7 @@ export async function invokeClient(client, input) {
       const body = response.value;
       const keys = body?.ok === true ? ["v", "rid", "ok", "result", "time", "replayed", "remainingMs"] : ["v", "rid", "ok", "fault", "time"];
       if (!object(body) || body.v !== 1 || body.rid !== input.rid || typeof body.ok !== "boolean" || !Number.isSafeInteger(body.time) || Object.keys(body).sort().join(",") !== [...keys].sort().join(",")) fail("protocol", "Broker response does not match request", { id: input.rid });
-      if (!body.ok) {
-        if (response.status >= 200 && response.status < 300) throw parseFault(body);
-        throw parseFault(body);
-      }
+      if (!body.ok) throw parseFault(body);
       if (response.status < 200 || response.status >= 300) fail("protocol", "Broker returned an invalid success status", { id: input.rid });
       if (!Object.hasOwn(body, "result") || typeof body.replayed !== "boolean" || (body.remainingMs !== null && (!Number.isSafeInteger(body.remainingMs) || body.remainingMs < 0))) fail("protocol", "Broker success response is malformed", { id: input.rid });
       if (!validResult(input.op, body.result)) fail("protocol", "Broker result does not match the operation", { id: input.rid });

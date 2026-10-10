@@ -6,6 +6,7 @@
     "empty": "actual empty store renders both Empty panes",
     "offline": "actual broker stop leaves connected state",
     "reconnect": "real broker restart restores clean Empty panes",
+    "paneRecovery": "one injected HTTP 503 followed by a real committed post restores Ready with no stale error flag",
     "inertText": "real posted HTML-like text remains text with no executable element"
   },
   "browserOwned": true,
