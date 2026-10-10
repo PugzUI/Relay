@@ -8,6 +8,7 @@ import { LIMITS, canonicalJson, fingerprint, validateAddress, validateDeviceName
 
 const id = () => randomUUID();
 const openRelays = new WeakMap();
+const localPoolAuthorizations = new WeakSet();
 const safeJson = (value) => {
   try { return JSON.parse(value); }
   catch { throw new Fault("schema", "Persisted JSON data is invalid"); }
@@ -771,7 +772,7 @@ function authorizeCore(relay, authorization, op, args) {
   const grant = principal.grant;
   const worker = (sid) => {
     const row = relay._store.db.prepare("SELECT worker,principal FROM sessions WHERE id=?").get(sid);
-    if (!row || (row.principal && row.principal !== principal.id) || !grantHas(grant.workers, row.worker)) throw new Fault("denied", "Worker is outside this principal scope", { sid });
+    if (!row || (!localPoolAuthorizations.has(authorization) && row.principal && row.principal !== principal.id) || !grantHas(grant.workers, row.worker)) throw new Fault("denied", "Worker is outside this principal scope", { sid });
     return row.worker;
   };
   if (op === "register") {
@@ -811,7 +812,7 @@ function replayResult(relay, row, authorization) {
   const result = safeJson(row.result);
   if (row.sid) {
     const session = relay._store.db.prepare("SELECT s.*,a.epoch AS current_epoch FROM sessions s JOIN agents a ON a.id=s.worker WHERE s.id=?").get(row.sid);
-    const local = authorization.principal.id === `local:${relay.authority}`;
+    const local = localPoolAuthorizations.has(authorization);
     if (!session || (!local && session.principal !== authorization.principal.id) || session.epoch !== row.epoch || session.epoch !== session.current_epoch) throw new Fault("session", "Request outcome belongs to a superseded session", { sid: row.sid });
   }
   if (row.op === "claim") {
@@ -902,7 +903,9 @@ export function dispatchLocalPool(relay, { rid, op, args }) {
   const worker = args.sid ? relay._store.db.prepare("SELECT worker FROM sessions WHERE id=?").get(args.sid)?.worker : "";
   const authorization = { operation: op, principal: { id: `local:${relay.authority}`, grant: { workers: [worker], boardClaim: ["bounty", `host:${relay.device.id}`] } }, scopeKey: "local" };
   const beforeCommit = () => {};
-  return dispatchRpc(relay, { authorization, rid, op, args, beforeCommit });
+  localPoolAuthorizations.add(authorization);
+  try { return dispatchRpc(relay, { authorization, rid, op, args, beforeCommit }); }
+  finally { localPoolAuthorizations.delete(authorization); }
 }
 
 export function inspectAttempt(relay, { sid, lease }, authorization = null) {
