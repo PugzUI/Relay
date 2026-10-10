@@ -14,6 +14,7 @@ import {
 const PAGE_SIZE = 50;
 const MAX_RESPONSE_BYTES = 1_048_576;
 const REQUEST_DEADLINE_MS = 10_000;
+const MAX_SNAPSHOT_ATTEMPTS = 3;
 const state = createUiState();
 const requestControllers = new Set();
 const paneControllers = new Map();
@@ -150,13 +151,20 @@ async function requestJson(path, { signal, pane } = {}) {
       redirect: "error",
       signal: controller.signal,
     });
+    const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
     if (!response.ok) {
       const failure = safeHttpError(response.status);
+      if (response.status === 503 && !pane && type === "application/json") {
+        const value = JSON.parse(await readBounded(response, controller));
+        if (value?.v === 1 && value.fault?.code === "reset") {
+          failure.code = "reset";
+          failure.label = "Topology changed";
+        }
+      }
       const error = new Error(failure.label);
       error.code = failure.code;
       throw error;
     }
-    const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
     if (type !== "application/json") throw new Error("Invalid response type");
     return JSON.parse(await readBounded(response, controller));
   } catch (error) {
@@ -169,7 +177,7 @@ async function requestJson(path, { signal, pane } = {}) {
       throw error;
     }
     controller.abort();
-    if (error?.code === "auth" || (error?.code === "denied" && !pane)) handleAuthFault(error, token);
+    if (!signal?.aborted && (error?.code === "auth" || (error?.code === "denied" && !pane))) handleAuthFault(error, token);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -179,18 +187,25 @@ async function requestJson(path, { signal, pane } = {}) {
 }
 
 async function loadSnapshot(signal) {
-  const pages = [];
-  let after = null;
-  for (let pageNo = 0; pageNo < 32; pageNo += 1) {
-    const url = new URL("/v1/topology", location.origin);
-    url.searchParams.set("limit", "512");
-    if (after) url.searchParams.set("after", after);
-    const page = parseSnapshot(await requestJson(`${url.pathname}${url.search}`, { signal }));
-    pages.push(page);
-    if (page.complete) return mergeSnapshotPages(pages);
-    after = page.next;
+  for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+    const pages = [];
+    let after = null;
+    try {
+      for (let pageNo = 0; pageNo < 32; pageNo += 1) {
+        if (signal.aborted) throw new DOMException("Snapshot cancelled", "AbortError");
+        const url = new URL("/v1/topology", location.origin);
+        url.searchParams.set("limit", "512");
+        if (after) url.searchParams.set("after", after);
+        const page = parseSnapshot(await requestJson(`${url.pathname}${url.search}`, { signal }));
+        pages.push(page);
+        if (page.complete) return mergeSnapshotPages(pages);
+        after = page.next;
+      }
+      throw new Error("Topology page limit exceeded");
+    } catch (error) {
+      if (error.code !== "reset" || signal.aborted || attempt === MAX_SNAPSHOT_ATTEMPTS - 1) throw error;
+    }
   }
-  throw new Error("Topology page limit exceeded");
 }
 
 function boardAge(board, now) {
@@ -511,7 +526,8 @@ async function refreshSnapshot() {
   } catch (error) {
     if (error.name === "AbortError") return;
     if (error.code === "auth" || error.code === "denied") return;
-    setConnection("error", error.code === "unavailable" ? "Unavailable" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid topology");
+    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration || pageHidden) return;
+    setConnection("error", error.code === "reset" ? "Topology changed" : error.code === "unavailable" ? "Unavailable" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid topology");
     statusNode.dataset.state = "error";
   } finally {
     requestControllers.delete(controller);
@@ -649,6 +665,7 @@ for (const name of ["inbox", "bounties"]) {
 document.addEventListener("visibilitychange", () => {
   pageHidden = document.hidden;
   if (pageHidden) {
+    snapshotController?.abort();
     state.pulses = [];
     clearTimeout(pulseTimer);
     drawTopology();

@@ -2,7 +2,7 @@
 
 ## Native execution
 
-The regression suite passed with **96 tests, no failures or skips** on Linux
+The regression suite passed with **105 tests, no failures or skips** on Linux
 with Node.js **24.21.0** and **26.11.1**. Earlier local runs also exercised
 Node.js 26.8.1. `npm run check` passed syntax, the nine public exports, strict
 consumer declarations, required modules, and the actual package-file manifest.
@@ -55,6 +55,33 @@ Native [browser checks](media/browser-qa.json) exercised:
 The wide, narrow topology and narrow board captures were visually reviewed for
 readability, hierarchy, wrapping, alignment and clipping. Recorded images are
 not live telemetry or evidence of physical network deployment.
+
+## Initial snapshot recovery
+
+Nine additional regressions exercise native continuation cursors with no links,
+reset-only recovery, a three-attempt limit, credential revocation during recovery,
+non-retried refusals, hidden-tab cancellation, and late failures from obsolete
+snapshot generations. The continuation producer now emits `null`, not an empty
+string, for a collection that has no pagination marker.
+
+A fresh headless Chromium profile exercised a native loopback broker with 513
+synthetic agents, forcing a two-page snapshot. The comparison served the previous
+UI controller and then the current controller against the same native broker.
+An actual authenticated post between pages caused the native `503 reset`:
+
+- Previous controller: `200, 503`, Unavailable, no topology and no event stream.
+- Current controller: `200, 503, 200, 200`, Connected, all agents loaded, selected
+  bounty Inbox Ready, Bounties Empty, and one event-stream request.
+- A later committed post reached the Inbox through the recovered live feed.
+
+The probe paced that later post by 1,100 ms to respect the existing request-rate
+budget; it did not relax any broker limit. Both 1280 px and 390 px views had no
+measured horizontal overflow or uncaught page runtime errors. The
+[recorded observations](media/snapshot-recovery.json) use `requests` booleans to
+indicate first-page (`false`) versus continuation (`true`) requests. The saved
+[before](media/snapshot-before.png), [recovered wide](media/snapshot-after-wide.png),
+and [recovered narrow](media/snapshot-after-narrow.png) images were visually
+reviewed; all identities and posted text are disposable synthetic data.
 
 ## Open qualification boundaries
 

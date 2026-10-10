@@ -644,7 +644,7 @@ export class Relay {
       const clipped = agents.filter((a) => a.id > lastAgent).length > visibleAgents.length || links.filter((item) => item.id > lastLink).length > visibleLinks.length;
       const cursor = encodeFeedCursor({ v: 1, authority: this.authority, stream, seq: boundary, scope });
       const next = clipped ? encodeSnapshotCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, time: tokenTime, last: {
-        agent: visibleAgents.at(-1)?.id ?? lastAgent, link: visibleLinks.at(-1)?.id ?? lastLink,
+        agent: visibleAgents.at(-1)?.id ?? (lastAgent || null), link: visibleLinks.at(-1)?.id ?? (lastLink || null),
       } }) : null;
       const visible = { devices: devices.length, agents: visibleAgents.length, boards: boards.length, links: visibleLinks.length };
       return { v: 1, authority: this.authority, time: tokenTime, cursor, devices: devices.map((r) => ({ ...deviceRow(r), authority: this.authority,

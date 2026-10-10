@@ -14,9 +14,13 @@ slots, not measured CPU/GPU availability.
 
 Snapshot and feed cursors share a read boundary. A changed scope, broker
 restart, expired cursor, ring overflow, or slow viewer may require a fresh
-snapshot. The stream is bounded and does not block a lease transaction. A
-hidden tab pauses motion and displays current state after resynchronization,
-not old events as current activity.
+snapshot. If topology changes between initial snapshot pages, the view discards
+the partial pages and retries from the first page, up to three attempts. Only a
+native snapshot `reset` triggers this retry; other refusals stop the load.
+Cancellation, a hidden tab, or a superseding connection stops the old load.
+The stream is bounded and does not block a lease transaction. A hidden tab
+pauses motion and displays current state after resynchronization, not old events
+as current activity.
 
 The capture command uses the integrated UI at a loopback origin, submits a
 private demo token through the UI form, and waits for connected topology plus
