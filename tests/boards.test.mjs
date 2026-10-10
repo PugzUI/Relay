@@ -25,3 +25,16 @@ test("A38 earlier ineligible series member blocks later work", (t) => {
   relay.post(session.id, board, { work: { step: 2 } }, { series: "s" });
   assert.equal(relay.claim(session.id, { board }), null);
 });
+
+test("A38 blocked series does not starve independent eligible work", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "series-independent" }); t.after(() => relay.close());
+  const worker = relay.register("worker", { caps: ["inspect"] });
+  const session = relay.join(worker.id); const board = `host:${relay.device.id}`;
+  relay.post(session.id, board, { work: { step: 1 } }, { needs: ["missing"], series: "s" });
+  relay.post(session.id, board, { work: { step: 2 } }, { needs: ["inspect"], series: "s" });
+  const independent = relay.post(session.id, board, { work: { task: "independent" } }, { needs: ["inspect"] });
+  const lease = relay.claim(session.id, { board });
+  assert.equal(lease.mid, independent.id);
+  relay.ack(session.id, lease.id, "done");
+  assert.equal(relay.claim(session.id, { board }), null);
+});

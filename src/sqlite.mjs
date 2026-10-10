@@ -24,9 +24,14 @@ export function openDatabase({ root, create, readOnly, busyTimeoutMs = 5000 }) {
     try { info = lstatSync(requested); } catch (error) { if (error.code === "ENOENT") throw new Fault("missing", "Store does not exist"); throw storageFault(error); }
     if (info.isSymbolicLink() || !info.isDirectory()) throw new Fault("schema", "Store root must be a real directory");
     const file = join(requested, "relay.sqlite");
-    rejectSymlink(file, false);
-    rejectSymlink(`${file}-wal`);
-    rejectSymlink(`${file}-shm`);
+    try {
+      rejectSymlink(file, false);
+      rejectSymlink(`${file}-wal`);
+      rejectSymlink(`${file}-shm`);
+    } catch (error) {
+      if (error.code === "ENOENT") throw new Fault("missing", "Store database does not exist", { cause: error });
+      throw storageFault(error);
+    }
     return openSync(requested, file, false, true, busyTimeoutMs);
   }
   try {
@@ -80,6 +85,7 @@ function openSync(root, file, create, readOnly, busyTimeoutMs) {
     return { root, file, db, readOnly, closed: false };
   } catch (error) {
     try { db?.close(); } catch {}
+    if (readOnly && error.code === "ENOENT") throw new Fault("missing", "Store database does not exist", { cause: error });
     throw storageFault(error);
   }
 }

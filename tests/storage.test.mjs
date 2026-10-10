@@ -6,6 +6,9 @@ import { temporaryRoot } from "./core-helpers.mjs";
 
 test("A53 setup role is immutable and missing read-only open creates no files", (t) => {
   const root = temporaryRoot(t);
+  const empty = temporaryRoot(t); mkdirSync(empty);
+  assert.throws(() => open({ root: empty, readOnly: true }), { code: "missing" });
+  assert.equal(existsSync(`${empty}/relay.sqlite`), false);
   assert.throws(() => open({ root, readOnly: true }), { code: "missing" });
   assert.equal(existsSync(root), false);
   const hub = setup({ root, device: "hub", role: "hub" });
