@@ -84,7 +84,7 @@ async function claimAt(pool, input, remote, board, kind) {
       throw error;
     }
   }
-  const localSid = input.localSid; const remoteSid = input.hubSid ?? null;
+  const localSid = input.localSid; const remoteSid = remote ? input.hubSid ?? null : null;
   const selectedSid = sid;
   const reserve = { worker, localSid, remoteSid, board, rid: requestId, authority, maxJobs: pool.maxJobs };
   try { reserveCapacity(pool.local, reserve); }

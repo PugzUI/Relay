@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { demoOptions } from "../scripts/demo.mjs";
+import { connect } from "../src/index.mjs";
 
 test("default demo options remain offline regardless of serve environment", () => {
   assert.deepEqual(demoOptions([], { RELAY_DEMO_PORT: "invalid", RELAY_DEMO_DURATION_MS: "invalid" }), { serve: false });
@@ -73,6 +74,7 @@ test("serve mode writes a private token, reports only its path, and cleans up on
   ]);
   assert.equal(ready, true);
   await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   const token = (await readFile(tokenFile, "utf8")).trim();
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
   if (process.platform !== "win32") assert.equal((await stat(tokenFile)).mode & 0o077, 0);
@@ -80,6 +82,21 @@ test("serve mode writes a private token, reports only its path, and cleans up on
   assert.equal(stdout.includes(token), false);
   assert.equal(/"sid"\s*:|"sessionId"\s*:/i.test(stdout), false);
   assert.match(stdout, new RegExp(`http://127\\.0\\.0\\.1:${port}`));
+  const readyState = JSON.parse(stdout);
+  const client = await connect({ url: `http://127.0.0.1:${port}`, tokenFile, mode: "local" });
+  try {
+    await client.snapshot({ limit: 64 });
+    for (const board of ["bounty", `host:${readyState.device.id}`]) {
+      await client.list({ board, kind: "msg", data: true });
+      await client.list({ board, kind: "work", data: true });
+    }
+    await assert.rejects(client.register("worker", { slot: "001" }), (error) => error.code === "denied");
+    await assert.rejects(client.post("invalid-session", "bounty", { msg: "denied" }), (error) => error.code === "denied");
+    await assert.rejects(client.claim("invalid-session", { board: "bounty" }), (error) => error.code === "denied");
+    await assert.rejects(client.stats(), (error) => error.code === "denied");
+  } finally {
+    await client.close();
+  }
   child.kill("SIGTERM");
   const [code, signal] = await once(child, "exit");
   assert.equal(code, 0, stderr);

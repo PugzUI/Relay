@@ -14,6 +14,7 @@ import { createPool } from "../src/pool.mjs";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scratchRoot = path.resolve(os.tmpdir());
 const workerName = "worker";
+const RATE_WINDOW_MS = 1000;
 
 function assertPrivateRoot(root) {
   assert.ok(root.startsWith(`${scratchRoot}${path.sep}`), `test root must be beneath ${scratchRoot}`);
@@ -278,6 +279,10 @@ async function waitFor(check, label, timeoutMs = 4000) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+function waitForFreshRateWindow() {
+  return new Promise((resolve) => setTimeout(resolve, RATE_WINDOW_MS));
+}
+
 function parseSse(text) {
   const frames = [];
   for (const block of text.split(/\r?\n\r?\n/)) {
@@ -319,6 +324,7 @@ async function readFeedEvent(url, token, cursor, mid) {
 
 test("hub enrollment, device-qualified sessions, board isolation, and explicit msg/work panes", async (t) => {
   const env = await createPair(t);
+  await waitForFreshRateWindow();
   const msgBody = "work: keep this text in Inbox";
   const localMsg = await env.host.post(env.hostSid, env.hostBoard, { msg: msgBody }, { key: "local-msg" });
   const localWork = await env.host.post(env.hostSid, env.hostBoard, { work: { task: "local-only" } }, { key: "local-work" });
@@ -351,6 +357,7 @@ test("hub enrollment, device-qualified sessions, board isolation, and explicit m
 
 test("authenticated topology and committed feed expose metadata without payload or session data", async (t) => {
   const env = await createPair(t);
+  await waitForFreshRateWindow();
   const secretText = "private-payload-should-never-enter-global-feed";
   const admitted = await env.hub.post(env.hubSid, "bounty", { msg: secretText }, { key: "feed-secret" });
   const response = await request(`${env.hubUrl}/v1/topology`, { token: env.hubToken });
@@ -374,6 +381,7 @@ test("authenticated topology and committed feed expose metadata without payload 
 
 test("Pool holds cross-authority capacity through a lost hub claim reply, recovers the same lease, then serves local work", async (t) => {
   const env = await createPair(t);
+  await waitForFreshRateWindow();
   const proxy = await createResponseDropProxy(env.hubUrl, env.owned);
   const uncertainHub = await connectWithToken(proxy.url, env.root, env.hubToken, "hub-proxied");
   env.owned.clients.push(uncertainHub.client);
@@ -382,7 +390,7 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
     hub: uncertainHub.client,
     maxAgents: 2,
     maxJobs: 1,
-    pollMs: 100,
+    pollMs: 1000,
     minBackoffMs: 100,
     maxBackoffMs: 300,
     launch: null,
@@ -402,10 +410,13 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
 
   const localWork = await env.host.post(env.hostSid, env.hostBoard, { work: { task: "local-waits" } }, { key: "local-waits" });
   const blocked = await pool.claim({ worker: env.worker, localSid: env.hostSid, hubSid: env.hubSid });
-  assert.equal(blocked, null);
+  assert.equal(blocked.state, "uncertain");
+  assert.equal(blocked.rid, uncertain.rid);
+  assert.equal(blocked.authority, uncertain.authority);
   assert.equal((await env.host.list({ board: env.hostBoard, kind: "work" })).items[0].state, "pending");
 
   proxy.disarm();
+  await waitForFreshRateWindow();
   const controller = new AbortController();
   let recovered;
   const start = pool.start({
@@ -414,14 +425,18 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
     hubSid: env.hubSid,
     signal: controller.signal,
     async execute(item) {
+      assert.equal(item.lease.mid, remoteWork.id);
       recovered = item;
+      controller.abort();
       return "done";
     },
   });
   try {
     await waitFor(async () => {
       const page = await env.hub.list({ board: "bounty", kind: "work" });
-      return page.items.find((item) => item.id === remoteWork.id)?.state === "done";
+      if (page.items.find((item) => item.id === remoteWork.id)?.state === "done") return true;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return false;
     }, "recovered hub work settlement");
   } finally {
     controller.abort();
