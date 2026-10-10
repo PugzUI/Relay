@@ -72,17 +72,24 @@ export async function readCaptureToken(path = process.env.RELAY_CAPTURE_TOKEN_FI
   if (!path) throw new Error("set RELAY_CAPTURE_TOKEN_FILE to a private Relay token file");
   const tokenPath = resolve(path);
   let handle;
-  try { handle = await open(tokenPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
+  try { handle = await open(tokenPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (process.platform === "win32" ? 0 : constants.O_NONBLOCK)); }
   catch { throw new Error("capture token file could not be opened safely"); }
   let bytes;
   try {
     const info = await handle.stat();
-    if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) {
-      throw new Error("capture token file must be a regular, private file");
+    if (!info.isFile() || (process.platform !== "win32" && (info.uid !== process.getuid() || (info.mode & 0o077) !== 0))) {
+      throw new Error("capture token file must be an owned, regular, private file");
     }
     if (info.size > 44) throw new Error("capture token file has an invalid size");
-    bytes = await handle.readFile();
-    const token = bytes.toString("utf8").replace(/\n$/, "");
+    bytes = Buffer.alloc(45);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > 44) throw new Error("capture token file has an invalid size");
+    const token = bytes.toString("utf8", 0, length).replace(/\n$/, "");
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("capture token file has an invalid token");
     return token;
   } finally {

@@ -17,25 +17,44 @@ const fail = (code, message, context) => { throw new Fault(code, message, contex
 const ambiguousFault = (message) => { const error = new Fault("protocol", message); ambiguousResponses.add(error); return error; };
 const rid = () => randomBytes(18).toString("base64url");
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+async function readBounded(file, maxBytes, label) {
+  const buffer = Buffer.alloc(maxBytes + 1);
+  let length = 0;
+  try {
+    while (length < buffer.length) {
+      const { bytesRead } = await file.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+  } catch (error) {
+    buffer.fill(0);
+    throw error;
+  }
+  if (length > maxBytes) {
+    buffer.fill(0);
+    fail("input", `${label} is too large`);
+  }
+  return buffer.subarray(0, length);
+}
 async function readPrivate(path, label, maxBytes) {
   let file;
-  try { file = await openFile(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW)); }
+  try { file = await openFile(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK)); }
   catch { fail("unavailable", `${label} is unavailable or unsafe`); }
   try {
     const stat = await file.stat();
     if (!stat.isFile() || process.platform !== "win32" && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)) fail("input", `${label} must be an owned private regular file`);
     if (stat.size > maxBytes) fail("input", `${label} is too large`);
-    const data = await file.readFile();
-    if (data.length > maxBytes) fail("input", `${label} is too large`);
-    return data;
+    return await readBounded(file, maxBytes, label);
   } finally { await file.close(); }
 }
 async function readToken(path) {
   const value = await readPrivate(path, "Token file", 45);
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
-  const token = text.endsWith("\n") ? text.slice(0, -1) : text;
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) fail("input", "Token file has invalid contents");
-  return token;
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
+    const token = text.endsWith("\n") ? text.slice(0, -1) : text;
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) fail("input", "Token file has invalid contents");
+    return token;
+  } finally { value.fill(0); }
 }
 function endpoint(value, mode) {
   let url;

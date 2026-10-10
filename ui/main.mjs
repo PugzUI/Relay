@@ -3,6 +3,7 @@ import {
   consumeSseBody,
   createUiState,
   clearPrivateState as clearPrivateUiState,
+  bindBoardAuthority,
   denyPane,
   mergeSnapshotPages,
   parseBoardPage,
@@ -193,7 +194,7 @@ async function loadSnapshot(signal) {
 }
 
 function boardAge(board, now) {
-  if (board.authority === state.snapshot?.authority) return "local";
+  if (!board.reported) return "local";
   if (board.receivedAt === null) return "age unknown · stale";
   const age = now - board.receivedAt;
   if (age < 0) return "age unknown · stale";
@@ -269,7 +270,7 @@ function drawTopology(snapshot = state.snapshot) {
     button.type = "button";
     button.dataset.board = board.id;
     button.setAttribute("aria-pressed", String(state.selectedBoard === board.id));
-    const reported = board.authority === snapshot.authority ? "local" : board.reported ? "reported" : "unreported";
+    const reported = board.reported ? "reported" : "local";
     button.append(node("span", "node-id", board.id), node("span", "node-state", reported));
     button.append(node("span", "node-detail", `inbox ${board.inbox} · pending ${board.pending} · claimed ${board.claimed} · terminal ${board.terminal} · ${boardAge(board, snapshot.time)}`));
     button.addEventListener("click", () => chooseBoard(board.id));
@@ -420,8 +421,9 @@ async function loadPane(name, after, reuse = false) {
   const pane = state[name];
   const generation = pane.generation;
   const selectedBoard = state.selectedBoard;
-  const boardAuthority = state.snapshot?.boards.find((board) => board.id === selectedBoard)?.authority;
-  if (!state.token || !selectedBoard || !boardAuthority) return;
+  const board = state.snapshot?.boards.find((item) => item.id === selectedBoard);
+  const boardAuthority = state.boardAuthority ?? (board && (!board.reported || board.authority !== state.snapshot.authority) ? board.authority : null);
+  if (!state.token || !selectedBoard || !board) return;
   pane.loading = true;
   pane.error = null;
   renderPane(name);
@@ -433,8 +435,10 @@ async function loadPane(name, after, reuse = false) {
   if (after) url.searchParams.set("after", after);
   try {
     const raw = await requestJson(`${url.pathname}${url.search}`, { pane: name });
-    const page = parseBoardPage(raw, selectedBoard, name === "inbox" ? "msg" : "work", boardAuthority);
+    const parsed = parseBoardPage(raw, selectedBoard, name === "inbox" ? "msg" : "work", boardAuthority);
     if (generation !== pane.generation || selectedBoard !== state.selectedBoard || !state.token) return;
+    bindBoardAuthority(state, parsed.authority);
+    const page = parsed.page;
     if (reuse) pane.pages[pane.pageIndex] = page;
     else {
       pane.pages = pane.pages.slice(0, pane.pageIndex + 1);

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   commitPulse,
+  bindBoardAuthority,
   consumeSseBody,
   createUiState,
   clearPrivateState,
@@ -27,7 +28,7 @@ const canonicalJson = (value) => Array.isArray(value) ? `[${value.map(canonicalJ
     : JSON.stringify(value);
 const encodeToken = (value) => btoa(canonicalJson(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 const feedCursor = (seq = 1, authority = "auth-1") => encodeToken({ v: 1, authority, stream: "stream", seq, scope });
-const messageCursor = (last = 0) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 20, last });
+const messageCursor = (last = 0, authority = "auth-1") => encodeToken({ v: 1, authority, scope, filter, boundary: 20, last });
 const snapshotCursor = (time = 1_000) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 1, time, last: { agent: "", link: "" } });
 
 function snapshot(overrides = {}) {
@@ -144,9 +145,29 @@ test("A49 pane page validates kind, board, envelope and stable pagination counts
     items: [{ id: "m1", seq: 1, from: "worker", to: null, board: "bounty", kind: "msg", needs: [], series: null, data: { msg: "<script>text only</script>\nα" }, state: "posted", init: 1, acked: null }],
     total: 2, visible: 1, complete: false, cursor: messageCursor(), next: messageCursor(1), firstSeq: 1, pruned: 0,
   };
-  assert.equal(parseBoardPage(page, "bounty", "msg", "auth-1").items[0].data.msg, "<script>text only</script>\nα");
+  assert.equal(parseBoardPage(page, "bounty", "msg", "auth-1").page.items[0].data.msg, "<script>text only</script>\nα");
   assert.throws(() => parseBoardPage(page, "bounty", "work", "auth-1"), /scope mismatch/);
   assert.throws(() => parseBoardPage({ ...page, total: 0 }, "bounty", "msg", "auth-1"), /invalid counts/);
+});
+
+test("reported metadata can bind recovered body authority once and rejects later pane or page changes", () => {
+  const hostAuthority = "host-authority";
+  const reported = { ...board, authority: "auth-1", reported: true };
+  const state = createUiState();
+  state.snapshot = parseSnapshot(snapshot({ boards: [reported] }));
+  selectBoard(state, reported.id);
+
+  const recovered = { items: [], total: 0, visible: 0, complete: true, cursor: messageCursor(0, hostAuthority), next: null, firstSeq: null, pruned: 0 };
+  const parsed = parseBoardPage(recovered, reported.id, "msg");
+  bindBoardAuthority(state, parsed.authority);
+  assert.equal(state.boardAuthority, hostAuthority);
+  assert.equal(parseBoardPage(recovered, reported.id, "msg", state.boardAuthority).authority, hostAuthority);
+
+  const changedRepeat = { ...recovered, cursor: messageCursor(0, "changed-authority") };
+  assert.throws(() => parseBoardPage(changedRepeat, reported.id, "msg", state.boardAuthority), /authority mismatch/);
+  const changedPeerPane = { ...recovered, cursor: messageCursor(0, "changed-authority") };
+  assert.throws(() => parseBoardPage(changedPeerPane, reported.id, "work", state.boardAuthority), /authority mismatch/);
+  assert.throws(() => bindBoardAuthority(state, "changed-authority"), /authority mismatch/);
 });
 
 test("A50 selecting and parsing shared Inbox pages creates no read receipt or local read cursor", () => {
@@ -190,6 +211,7 @@ test("A51 revoked credentials clear selected and cached private page state", asy
   assert.equal(state.token, null);
   assert.equal(state.snapshot, null);
   assert.equal(state.selectedBoard, null);
+  assert.equal(state.boardAuthority, null);
   assert.equal(state.inbox.page, null);
   assert.deepEqual(state.inbox.pages, []);
   assert.equal(state.bounties.page, null);
@@ -279,8 +301,8 @@ test("native CORE snapshot, board pages, and feed deltas match the UI contract",
     relay.post(session.id, board, { work: { task: "bounty probe" } });
     const inbox = parseBoardPage(relay.list({ board, kind: "msg", limit: 1, data: true }, authorization), board, "msg", relay.authority);
     const bounties = parseBoardPage(relay.list({ board, kind: "work", limit: 1, data: true }, authorization), board, "work", relay.authority);
-    assert.equal(inbox.items.length, 1);
-    assert.equal(bounties.items.length, 1);
+    assert.equal(inbox.page.items.length, 1);
+    assert.equal(bounties.page.items.length, 1);
 
     const first = parseSnapshot(feed.snapshot({ limit: 1 }, authorization));
     assert.equal(first.complete, false);

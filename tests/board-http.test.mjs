@@ -75,7 +75,7 @@ test("A49 actual board HTTP pages match the native UI data contract", async () =
         const url = new URL(`/v1/board?board=${encodeURIComponent(board)}&kind=${kind}&limit=50&data=1`, `http://127.0.0.1:${port}`);
         const response = await fetch(url, { headers: { Authorization: `Bearer ${auth.token}` }, redirect: "error", signal: AbortSignal.timeout(10000) });
         assert.equal(response.status, 200);
-        const page = parseBoardPage(await response.json(), board, paneKind, authority);
+        const page = parseBoardPage(await response.json(), board, paneKind, authority).page;
         assert.equal(page.total, 1);
         assert.equal(page.items[0].kind, kind);
       }
@@ -142,8 +142,15 @@ test("fixed host views expose the owning authority to topology and forward pages
 
       const tls = await tlsFiles(root);
       const forwardedAuth = [];
+      let unavailableHealth = false;
       tlsView = https.createServer({ key: await readFile(tls.key), cert: await readFile(tls.cert) }, (req, res) => {
         forwardedAuth.push(req.headers.authorization);
+        if (unavailableHealth && req.url === "/v1/health") {
+          unavailableHealth = false;
+          res.writeHead(503, { "content-type": "application/json" });
+          res.end(JSON.stringify({ fault: { code: "unavailable", message: "fixture unavailable" } }));
+          return;
+        }
         const upstream = http.request({ hostname: "127.0.0.1", port: hostPort, method: req.method, path: req.url, headers: req.headers }, (response) => {
           res.writeHead(response.statusCode, response.headers);
           response.pipe(res);
@@ -185,10 +192,24 @@ test("fixed host views expose the owning authority to topology and forward pages
       for (const [kind, paneKind] of [["msg", "msg"], ["work", "work"]]) {
         const pageResponse = await fetch(`${origin}/v1/board?board=${encodeURIComponent(board)}&kind=${kind}&data=1`, { headers: { Authorization: `Bearer ${boardViewer.token}` }, redirect: "error" });
         assert.equal(pageResponse.status, 200);
-        const page = parseBoardPage(await pageResponse.json(), board, paneKind, hostAuthority);
+        const page = parseBoardPage(await pageResponse.json(), board, paneKind, hostAuthority).page;
         assert.equal(page.total, 1);
         assert.equal(page.items[0].kind, kind);
       }
+
+      unavailableHealth = true;
+      const offlineSnapshotResponse = await fetch(`${origin}/v1/topology`, { headers: { Authorization: `Bearer ${boardViewer.token}` } });
+      assert.equal(offlineSnapshotResponse.status, 200);
+      const offlineSnapshot = parseSnapshot(await offlineSnapshotResponse.json());
+      const reportedBoard = offlineSnapshot.boards.find((item) => item.id === board);
+      assert.equal(reportedBoard.reported, true);
+      assert.equal(reportedBoard.authority, hubAuthority);
+      const recoveredPageResponse = await fetch(`${origin}/v1/board?board=${encodeURIComponent(board)}&kind=msg&data=1`, { headers: { Authorization: `Bearer ${boardViewer.token}` }, redirect: "error" });
+      assert.equal(recoveredPageResponse.status, 200);
+      const recoveredPage = parseBoardPage(await recoveredPageResponse.json(), board, "msg");
+      assert.equal(recoveredPage.page.total, 1);
+      assert.equal(recoveredPage.authority, hostAuthority);
+      assert.equal(recoveredPage.page.items[0].board, board);
       assert.ok(forwardedAuth.length >= 3);
       assert.ok(forwardedAuth.every((value) => value === `Bearer ${hostView.token}`));
       assert.ok(forwardedAuth.every((value) => value !== `Bearer ${boardViewer.token}` && value !== `Bearer ${topologyOnly.token}`));
