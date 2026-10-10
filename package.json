@@ -1,0 +1,33 @@
+{
+  "name": "@pugzui/relay",
+  "version": "0.1.0",
+  "description": "Device-qualified relays, boards, and topology view",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "license": "MIT",
+  "bin": {
+    "relay": "./src/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.mjs"
+    }
+  },
+  "files": [
+    "src/",
+    "ui/",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test",
+    "demo": "node scripts/demo.mjs",
+    "capture": "node scripts/capture.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
