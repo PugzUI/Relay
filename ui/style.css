@@ -1,0 +1,87 @@
+:root {
+  color-scheme: dark;
+  font-family: "Noto Sans", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  background: #000;
+  color: #f4f4f4;
+  --surface: #070707;
+  --surface-raised: #0f0f0f;
+  --line: #303030;
+  --secondary: #c2c2c2;
+  --activity: #c4ff00;
+}
+
+* { box-sizing: border-box; border-radius: 0 !important; }
+body { margin: 0; min-width: 320px; background: #000; }
+button, input, select { color: inherit; font: inherit; }
+button, select, input { min-height: 2.6rem; border: 1px solid var(--line); background: var(--surface); padding: .45rem .7rem; }
+button { cursor: pointer; }
+button:disabled, select:disabled { cursor: default; opacity: .55; }
+button:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--secondary); }
+:focus-visible { outline: 2px solid var(--activity); outline-offset: 2px; }
+a { color: inherit; text-decoration: none; }
+
+.topbar { min-height: 4.2rem; display: flex; align-items: center; gap: 1.25rem; padding: .7rem clamp(1rem, 3vw, 2.5rem); border-bottom: 1px solid var(--line); background: var(--surface); }
+.wordmark { font-size: 1.1rem; font-weight: 700; letter-spacing: .02em; }
+.auth-form { margin-left: auto; display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.auth-form label, .board-picker-label { color: var(--secondary); font-size: .82rem; }
+.auth-form input { width: min(22vw, 17rem); min-width: 8rem; }
+.connection { min-width: 6.5rem; color: var(--secondary); font: .78rem ui-monospace, "Cascadia Code", monospace; text-align: right; }
+.connection[data-state="connected"] { color: var(--activity); }
+main { width: min(100%, 1600px); margin: 0 auto; padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 3rem; }
+.topology-section, .boards-section { min-width: 0; }
+.section-heading { display: flex; align-items: baseline; gap: .8rem; min-height: 2.8rem; border-bottom: 1px solid var(--line); }
+h1, h2, h3 { margin: 0; font-size: 1rem; font-weight: 650; }
+.section-heading h1, .section-heading h2 { margin-right: auto; }
+.meta, .status-line { color: var(--secondary); font: .78rem ui-monospace, "Cascadia Code", monospace; overflow-wrap: anywhere; }
+.status-line { min-height: 2rem; padding: .55rem 0 .2rem; }
+.status-line[data-state="error"] { color: var(--secondary); }
+.topology { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); align-items: start; gap: 1.25rem; min-height: 7rem; padding: 1rem 0 2rem; overflow: auto; }
+.topology-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.topology-path { fill: none; stroke: var(--line); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.topology-path.is-active { stroke: var(--activity); stroke-width: 2.5; stroke-dasharray: 5 4; animation: path-flow 650ms linear infinite; }
+@keyframes path-flow { to { stroke-dashoffset: -18; } }
+.topology-column { position: relative; z-index: 1; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
+.topology-label { margin: 0 0 .4rem; color: var(--secondary); font-size: .73rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.node { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: .35rem .7rem; width: 100%; border: 1px solid var(--line); padding: .55rem .65rem; background: var(--surface); text-align: left; overflow-wrap: anywhere; }
+.node:hover { background: var(--surface-raised); }
+.node[aria-pressed="true"] { border-left: 2px solid var(--activity); padding-left: calc(.65rem - 1px); }
+.node-id { min-width: 0; font: .78rem ui-monospace, "Cascadia Code", monospace; }
+.node-state { color: var(--secondary); font-size: .72rem; text-align: right; }
+.node-detail { grid-column: 1 / -1; color: var(--secondary); font-size: .74rem; }
+.node-activity { color: var(--activity); }
+.boards-section { margin-top: 1rem; }
+.board-picker-label { white-space: nowrap; }
+.section-heading select { min-width: min(40vw, 22rem); max-width: 55vw; overflow: hidden; text-overflow: ellipsis; }
+.panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(1rem, 3vw, 2.5rem); padding-top: 1.35rem; }
+.pane { min-width: 0; background: transparent; }
+.pane-heading { min-height: 2.2rem; display: flex; align-items: baseline; gap: .75rem; border-bottom: 1px solid var(--line); }
+.pane-heading h3 { margin-right: auto; }
+.records { min-height: 5rem; max-height: 34rem; overflow: auto; list-style: none; margin: 0; padding: 0; border-bottom: 1px solid var(--line); }
+.record { min-width: 0; display: grid; grid-template-columns: minmax(7rem, 1fr) auto; gap: .25rem .8rem; padding: .65rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.record:last-child { border-bottom: 0; }
+.record-id, .record-state { font: .76rem ui-monospace, "Cascadia Code", monospace; }
+.record-state { color: var(--secondary); text-align: right; }
+.record-text { grid-column: 1 / -1; white-space: pre-wrap; overflow-wrap: anywhere; color: #e2e2e2; font: .83rem/1.5 ui-monospace, "Cascadia Code", monospace; tab-size: 4; }
+.record-meta { grid-column: 1 / -1; color: var(--secondary); font-size: .74rem; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding-top: .7rem; }
+.pager button { min-height: 2.2rem; font-size: .78rem; }
+.terminal { background: var(--surface); }
+
+@media (max-width: 760px) {
+  .topbar { flex-wrap: wrap; gap: .6rem .9rem; }
+  .auth-form { order: 3; width: 100%; margin-left: 0; gap: .4rem; }
+  .auth-form input { flex: 1; width: auto; min-width: 0; }
+  .auth-form button { padding-inline: .55rem; }
+  .connection { margin-left: auto; }
+  .panes { grid-template-columns: minmax(0, 1fr); gap: 1.6rem; }
+  .topology { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+  .section-heading { flex-wrap: wrap; }
+  .section-heading select { max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .topology-path.is-active { stroke-dasharray: none; }
+}

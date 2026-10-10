@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <title>Relay</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/main.mjs"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="/" aria-label="Relay">Relay</a>
+      <form id="auth-form" class="auth-form" autocomplete="off">
+        <label for="token">Bearer token</label>
+        <input id="token" name="token" type="password" autocomplete="off" spellcheck="false" required>
+        <button type="submit">Connect</button>
+      </form>
+      <div id="connection" class="connection" role="status" aria-live="polite">Disconnected</div>
+    </header>
+
+    <main>
+      <section class="topology-section" aria-labelledby="topology-title">
+        <div class="section-heading">
+          <h1 id="topology-title">Topology</h1>
+          <div id="snapshot-meta" class="meta" aria-live="polite"></div>
+        </div>
+        <div id="topology-status" class="status-line" role="status">Disconnected</div>
+        <div id="topology" class="topology" aria-label="Relay topology"></div>
+      </section>
+
+      <section class="boards-section" aria-labelledby="boards-title">
+        <div class="section-heading">
+          <h2 id="boards-title">Board</h2>
+          <label class="board-picker-label" for="board-picker">Selected board</label>
+          <select id="board-picker" disabled aria-label="Selected board"></select>
+        </div>
+        <div class="panes">
+          <section class="pane" aria-labelledby="inbox-title">
+            <div class="pane-heading">
+              <h3 id="inbox-title">Inbox</h3>
+              <span id="inbox-count" class="meta"></span>
+            </div>
+            <div id="inbox-status" class="status-line" role="status">Disconnected</div>
+            <ol id="inbox-rows" class="records terminal" aria-label="Inbox history"></ol>
+            <nav class="pager" aria-label="Inbox pages">
+              <button id="inbox-prev" type="button" disabled>Previous</button>
+              <span id="inbox-page" class="meta"></span>
+              <button id="inbox-next" type="button" disabled>Next</button>
+            </nav>
+          </section>
+          <section class="pane" aria-labelledby="bounties-title">
+            <div class="pane-heading">
+              <h3 id="bounties-title">Bounties</h3>
+              <span id="bounties-count" class="meta"></span>
+            </div>
+            <div id="bounties-status" class="status-line" role="status">Disconnected</div>
+            <ol id="bounties-rows" class="records" aria-label="Bounty work"></ol>
+            <nav class="pager" aria-label="Bounties pages">
+              <button id="bounties-prev" type="button" disabled>Previous</button>
+              <span id="bounties-page" class="meta"></span>
+              <button id="bounties-next" type="button" disabled>Next</button>
+            </nav>
+          </section>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
