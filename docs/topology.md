@@ -20,10 +20,14 @@ not old events as current activity.
 
 The capture command uses the integrated UI at a loopback origin, submits a
 private demo token through the UI form, and waits for connected topology plus
-nonempty Inbox and Bounties panes before saving wide/narrow screenshots and
-runtime metadata. It requires the actual disposable demo server; it does not
-mock UI responses. Screenshots and visual review remain pending a successful
-run against the merged backend.
+nonempty Inbox and Bounties panes before saving wide and narrow topology views,
+a narrow selected-board view scrolled into place, and runtime metadata. It checks
+the live origin, selected board, pane row counts, measured viewport and document
+width, visible keyboard focus, reduced-motion styles, and uncaught runtime
+exception count. Metadata contains board and row counts but no pane bodies,
+tokens, session IDs, or local paths. It requires the actual disposable demo
+server; it does not mock UI responses. Screenshots and visual review remain
+pending a successful run against the merged backend.
 
 The topology grant is metadata-only. Inbox and work bodies require separate
 permissions. Text is rendered as text, never HTML or terminal control. Board
