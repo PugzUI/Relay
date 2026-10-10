@@ -142,8 +142,13 @@ try {
     failures.push(`packaging:\n${pack.stdout}${pack.stderr}`);
   } else {
     try {
-      const packages = JSON.parse(pack.stdout);
-      if (!Array.isArray(packages) || packages.length !== 1 || !Array.isArray(packages[0]?.files)) {
+      const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+      const output = JSON.parse(pack.stdout);
+      const packages = Array.isArray(output) ? output
+        : output && typeof output === "object" && Object.keys(output).length === 1 && Object.hasOwn(output, manifest.name)
+          ? [output[manifest.name]] : [];
+      if (packages.length !== 1 || packages[0]?.name !== manifest.name || !Array.isArray(packages[0]?.files)
+        || packages[0].entryCount !== packages[0].files.length) {
         throw new Error("npm returned an invalid package file manifest");
       }
       const packedPaths = packages[0].files.map((file) => {
@@ -165,7 +170,6 @@ try {
         ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
       const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));
       if (missingPacked.length) failures.push(`packaging: missing runtime files ${JSON.stringify(missingPacked)}`);
-      const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
       const expectedFiles = ["src/", "ui/", "LICENSE"];
       if (JSON.stringify(manifest.files) !== JSON.stringify(expectedFiles)) {
         failures.push(`packaging: files allowlist must be ${expectedFiles.join(", ")}`);
