@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   commitPulse,
   consumeSseBody,
@@ -17,10 +20,13 @@ const agent = { id: "north:worker:prime", device: "dev-1", runtime: "worker", sl
 const board = { id: "bounty", kind: "bounty", device: null, authority: "auth-1", inbox: 1, pending: 2, claimed: 0, terminal: 0, reported: false, receivedAt: null };
 const scope = "a".repeat(64);
 const filter = "b".repeat(64);
-const encodeToken = (value) => btoa(JSON.stringify(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const canonicalJson = (value) => Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
+  : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+    : JSON.stringify(value);
+const encodeToken = (value) => btoa(canonicalJson(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 const feedCursor = (seq = 1, authority = "auth-1") => encodeToken({ v: 1, authority, stream: "stream", seq, scope });
 const messageCursor = (last = 0) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 20, last });
-const snapshotCursor = (time = 1_000) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 1, time, last: { agent: null, link: null } });
+const snapshotCursor = (time = 1_000) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 1, time, last: { agent: "", link: "" } });
 
 function snapshot(overrides = {}) {
   const value = {
@@ -46,6 +52,13 @@ test("A42 snapshot keeps exact totals distinct from visible rows and stale capac
 test("A42 rejects inconsistent visible counts and unsupported snapshot fields", () => {
   assert.throws(() => parseSnapshot(snapshot({ visible: { devices: 0, agents: 1, boards: 1, links: 0 } })), /inconsistent counts/);
   assert.throws(() => parseSnapshot(snapshot({ madeUp: true })), /unknown field/);
+});
+
+test("canonical cursors accept CORE key order and reject insertion-ordered JSON", () => {
+  assert.deepEqual(parseFeedFrame("reset", { event: "reset", cursor: feedCursor(), reason: "restart" }).event, "reset");
+  const insertionOrdered = btoa(JSON.stringify({ v: 1, authority: "auth-1", stream: "stream", seq: 1, scope }))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  assert.throws(() => parseFeedFrame("reset", { event: "reset", cursor: insertionOrdered, reason: "restart" }), /noncanonical JSON/);
 });
 
 test("A43 only committed accepted deltas create a bounded path pulse", () => {
@@ -161,4 +174,59 @@ test("A51 revoked credentials clear selected and cached private page state", asy
   assert.match(source, /function clearPrivateState\(\)[\s\S]*?state\.inbox = \{ page: null/);
   assert.match(source, /state\.bounties = \{ page: null/);
   assert.match(source, /error\.code === "auth" \|\| error\.code === "denied"/);
+});
+
+test("native CORE snapshot, board pages, and feed deltas match the UI contract", {
+  skip: !existsSync(new URL("../src/relay.mjs", import.meta.url)),
+}, async () => {
+  const [{ open, setup }, { createFeed }] = await Promise.all([
+    import("../src/index.mjs"), import("../src/feed.mjs"),
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "relay-ui-native-"));
+  let relay;
+  let feed;
+  let stream;
+  try {
+    setup({ root, device: "ui-probe", role: "hub" });
+    relay = open({ root });
+    const worker = relay.register("worker");
+    relay.register("worker", { slot: "002" });
+    const session = relay.join(worker.id);
+    feed = createFeed(relay);
+    const board = "bounty";
+    const authorization = {
+      scopeKey: "a".repeat(64),
+      principal: { id: "ui-probe", grant: { inboxRead: [board], workRead: [board] } },
+    };
+    relay.post(session.id, board, { msg: "inbox probe" });
+    relay.post(session.id, board, { work: { task: "bounty probe" } });
+    const inbox = parseBoardPage(relay.list({ board, kind: "msg", limit: 1, data: true }, authorization), board, "msg", relay.authority);
+    const bounties = parseBoardPage(relay.list({ board, kind: "work", limit: 1, data: true }, authorization), board, "work", relay.authority);
+    assert.equal(inbox.items.length, 1);
+    assert.equal(bounties.items.length, 1);
+
+    const first = parseSnapshot(feed.snapshot({ limit: 1 }, authorization));
+    assert.equal(first.complete, false);
+    const second = parseSnapshot(feed.snapshot({ limit: 1, after: first.next }, authorization));
+    const snapshotPage = mergeSnapshotPages([first, second]);
+    assert.equal(snapshotPage.totals.agents, 2);
+    assert.equal(snapshotPage.visible.agents, 2);
+    assert.equal(snapshotPage.boards[0].id, board);
+
+    const controller = new AbortController();
+    stream = feed.subscribe({ cursor: snapshotPage.cursor, authorization, signal: controller.signal });
+    const pending = stream.next();
+    relay.post(session.id, board, { msg: "stream probe" });
+    let timer;
+    const event = await Promise.race([pending, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("native feed probe timed out")), 2_000);
+    })]).finally(() => clearTimeout(timer));
+    assert.equal(event.value.event, "delta");
+    assert.equal(parseFeedFrame(event.value.event, event.value).data.type, "post");
+  } finally {
+    await stream?.return();
+    feed?.close();
+    relay?.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

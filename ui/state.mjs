@@ -53,6 +53,14 @@ function countFields(value, keys, label) {
   return value;
 }
 
+function canonicalKeyOrder(value) {
+  if (Array.isArray(value)) return value.every(canonicalKeyOrder);
+  if (value === null || typeof value !== "object") return true;
+  const keys = Object.keys(value);
+  return keys.every((key, index) => index === 0 || keys[index - 1] < key)
+    && Object.values(value).every(canonicalKeyOrder);
+}
+
 function nullableText(value, label) {
   return value === null ? null : text(value, label);
 }
@@ -75,7 +83,7 @@ function decodeCursor(token, maxBytes, keys, label) {
   let value;
   try { value = JSON.parse(decoded); } catch { throw new TypeError(`${label}: invalid JSON`); }
   exact(value, keys, label);
-  if (JSON.stringify(value) !== decoded || JSON.stringify(Object.keys(value)) !== JSON.stringify(keys)) throw new TypeError(`${label}: noncanonical JSON`);
+  if (JSON.stringify(value) !== decoded || !canonicalKeyOrder(value)) throw new TypeError(`${label}: noncanonical JSON`);
   if (value.v !== 1 || !/^[a-f0-9]{64}$/.test(value.scope)) throw new TypeError(`${label}: invalid version or scope`);
   text(value.authority, `${label}.authority`);
   return value;
@@ -99,7 +107,9 @@ function snapshotCursor(token) {
   if (!/^[a-f0-9]{64}$/.test(value.filter)) throw new TypeError("snapshot cursor.filter: invalid hash");
   integer(value.boundary, "snapshot cursor.boundary"); integer(value.time, "snapshot cursor.time");
   exact(value.last, ["agent", "link"], "snapshot cursor.last");
-  nullableText(value.last.agent, "snapshot cursor.last.agent"); nullableText(value.last.link, "snapshot cursor.last.link");
+  for (const key of ["agent", "link"]) {
+    if (value.last[key] !== null && typeof value.last[key] !== "string") throw new TypeError(`snapshot cursor.last.${key}: invalid position`);
+  }
   return value;
 }
 
