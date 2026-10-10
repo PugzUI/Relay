@@ -10,8 +10,36 @@ npm run demo
 The demo uses a temporary local store, two synthetic workers, board posts,
 claims, persisted acknowledgements, and the resulting snapshot/audit records.
 It does not launch an agent runtime or start a network listener. The source
-checkout is still being integrated; replay of this quick start is pending the
-core implementation merge.
+checkout uses the existing local core implementation.
+
+To run the authenticated browser demo, start its disposable loopback listener
+in one terminal. This explicit mode defaults to port `4200` and five minutes;
+it prints a private token-file path and the capture command, never the token or
+a session ID.
+
+```sh
+RELAY_DEMO_TOKEN_FILE=/tmp/relay-demo.token npm run demo -- --serve
+```
+
+In a second terminal, run this while the demo is still running:
+
+```sh
+RELAY_CAPTURE_TOKEN_FILE=/tmp/relay-demo.token npm run capture
+```
+
+Choose another fixed port or bounded duration when needed:
+
+```sh
+npm run demo -- --serve --port 4200 --duration-ms 300000
+```
+
+`RELAY_DEMO_PORT`, `RELAY_DEMO_DURATION_MS`, and `RELAY_DEMO_TOKEN_FILE` can
+also set those values. An existing token destination is refused. The demo
+listener binds only `127.0.0.1`, creates private disposable state and credentials,
+and removes them when its duration ends or it receives `SIGINT`/`SIGTERM`. Run
+`npm run capture` only against that live demo; it uses a fresh temporary browser
+profile. Browser capture exercises the local configured path. Physical LAN and
+Tailscale qualification remains pending.
 
 ## CLI
 
@@ -89,6 +117,7 @@ service configuration.
 npm run check
 npm test
 npm run demo
+npm run demo -- --serve
 npm run capture
 ```
 
