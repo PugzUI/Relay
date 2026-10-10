@@ -16,7 +16,7 @@ class Element extends EventTarget {
 }
 
 // Execute the real browser controller; only DOM geometry and transport are supplied by the fixture.
-export async function uiRuntime(fetch, { setTimeout: schedule = setTimeout, clearTimeout: cancel = clearTimeout, performance: clock = performance } = {}) {
+export async function uiRuntime(fetch) {
   const elements = new Map();
   const document = new EventTarget();
   document.hidden = false;
@@ -32,7 +32,7 @@ export async function uiRuntime(fetch, { setTimeout: schedule = setTimeout, clea
     ...uiState, clearPrivateUiState: uiState.clearPrivateState,
     document, window: new EventTarget(), location: { origin: "http://127.0.0.1" },
     fetch, URL, AbortController, DOMException, TextDecoder, TextEncoder, Uint8Array, JSON,
-    setTimeout: schedule, clearTimeout: cancel, performance: clock,
+    setTimeout, clearTimeout,
   });
   runInContext(source.replace(imports, ""), context);
   const run = (expression) => runInContext(expression, context);

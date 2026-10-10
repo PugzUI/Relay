@@ -191,28 +191,28 @@ test("hiding the page cancels snapshot recovery before another request", async (
 });
 
 for (const [status, code] of [[503, "unavailable"], [401, "auth"]]) {
-test(`an obsolete ${code} snapshot failure cannot overwrite a newer connected generation`, async () => {
-  await withSnapshotBroker(async ({ origin, token }) => {
-    let release;
-    let requests = 0;
-    const held = new Promise(resolve => { release = resolve; });
-    const ui = await uiRuntime(async (path, options) => {
-      if (++requests === 1) {
-        await held;
-        return Response.json({ v: 1, fault: { code, message: "late failure" }, time: Date.now() }, { status });
-      }
-      return fetch(new URL(path, origin), options);
+  test(`an obsolete ${code} snapshot failure cannot overwrite a newer connected generation`, async () => {
+    await withSnapshotBroker(async ({ origin, token }) => {
+      let release;
+      let requests = 0;
+      const held = new Promise(resolve => { release = resolve; });
+      const ui = await uiRuntime(async (path, options) => {
+        if (++requests === 1) {
+          await held;
+          return Response.json({ v: 1, fault: { code, message: "late failure" }, time: Date.now() }, { status });
+        }
+        return fetch(new URL(path, origin), options);
+      });
+      try {
+        ui.element("token").value = token;
+        const old = ui.run("connect()");
+        await ui.run("refreshSnapshot()");
+        assert.equal(ui.element("connection").textContent, "Connected");
+        release();
+        await old;
+        assert.equal(ui.element("connection").textContent, "Connected");
+        assert.equal(ui.run("state.snapshot.agents.length"), 513);
+      } finally { release(); await ui.close(); }
     });
-    try {
-      ui.element("token").value = token;
-      const old = ui.run("connect()");
-      await ui.run("refreshSnapshot()");
-      assert.equal(ui.element("connection").textContent, "Connected");
-      release();
-      await old;
-      assert.equal(ui.element("connection").textContent, "Connected");
-      assert.equal(ui.run("state.snapshot.agents.length"), 513);
-    } finally { release(); await ui.close(); }
   });
-});
 }
