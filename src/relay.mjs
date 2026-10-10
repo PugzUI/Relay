@@ -641,7 +641,7 @@ export class Relay {
       const visible = { devices: devices.length, agents: visibleAgents.length, boards: boards.length, links: visibleLinks.length };
       return { v: 1, authority: this.authority, time: tokenTime, cursor, devices: devices.map((r) => ({ ...deviceRow(r), authority: this.authority,
         receivedAt: reports.get(r.id)?.received ?? null, stale: reports.has(r.id) ? tokenTime - reports.get(r.id).received > LIMITS.reportStaleMs : false,
-        free: reports.has(r.id) && tokenTime - reports.get(r.id).received <= LIMITS.reportStaleMs ? safeJson(reports.get(r.id).report).agents.reduce((sum, a) => sum + (a.free ?? 0), 0) : null })),
+        free: reports.has(r.id) && tokenTime - reports.get(r.id).received <= LIMITS.reportStaleMs ? (reportData.get(r.id).agents.some((agent) => agent.free === null) ? null : reportData.get(r.id).agents.reduce((sum, agent) => sum + agent.free, 0)) : null })),
         agents: visibleAgents, boards, links: visibleLinks,
         totals: { devices: devices.length, agents: agents.length, boards: boards.length, links: links.length }, visible, complete: !clipped, next };
     });
