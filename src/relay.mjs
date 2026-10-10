@@ -16,6 +16,8 @@ const sha = (value) => createHash("sha256").update(value).digest("hex");
 const own = (obj, key) => Object.hasOwn(obj, key);
 const input = (ok, message) => { if (!ok) throw new Fault("input", message); };
 const tx = (relay, mode, fn) => withTransaction(relay._store, mode, fn);
+const faultCodes = new Set(["input", "data", "missing", "schema", "active", "session", "expired", "target", "device_conflict", "board", "key_conflict", "ack_conflict", "owner", "lease", "full", "busy", "clock", "storage", "auth", "denied", "protocol", "tls", "rpc_conflict", "uncertain", "cursor", "reset", "rate", "timeout", "unavailable"]);
+const reportEventStates = { post: ["posted", "pending"], claim: ["claimed"], release: ["pending"], ack: ["done", "failed", "rejected"], refusal: [null] };
 
 function readMeta(db, key) {
   const row = db.prepare("SELECT value FROM meta WHERE key=?").get(key);
@@ -24,6 +26,18 @@ function readMeta(db, key) {
   catch { throw new Fault("schema", "Store metadata is invalid"); }
 }
 function writeMeta(db, key, value) { db.prepare("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(value)); }
+function retentionKey(board, kind) { return `${board}|${kind}`; }
+function readMessagePruned(db) {
+  const counts = readMeta(db, "messagePruned") ?? {};
+  const boardCount = Number(db.prepare("SELECT COUNT(*) AS n FROM boards").get().n);
+  if (!counts || typeof counts !== "object" || Array.isArray(counts) || Object.keys(counts).length > boardCount * 2) throw new Fault("schema", "Message retention metadata is invalid");
+  for (const [key, count] of Object.entries(counts)) {
+    const separator = key.lastIndexOf("|");
+    const board = key.slice(0, separator); const kind = key.slice(separator + 1);
+    if (separator < 1 || !["msg", "work"].includes(kind) || !db.prepare("SELECT 1 FROM boards WHERE id=?").get(board) || !Number.isSafeInteger(count) || count < 0) throw new Fault("schema", "Message retention metadata is invalid");
+  }
+  return counts;
+}
 function deviceRow(row) { return { id: row.id, name: row.name, init: row.init }; }
 function agentRow(row) { return { id: row.id, device: row.device, runtime: row.runtime, slot: row.slot, caps: safeJson(row.caps), epoch: row.epoch, init: row.init }; }
 function sessionRow(row) { return { id: row.id, worker: row.worker, epoch: row.epoch, until: row.until, ended: row.ended ?? null }; }
@@ -325,7 +339,7 @@ export class Relay {
           if (board.kind === "bounty" && readMeta(db, "role") !== "hub") throw new Fault("board", "Bounty board is not local");
           if (row.series) {
             const earlier = db.prepare("SELECT id,state FROM messages WHERE board=? AND series=? AND seq<? AND state IN ('pending','claimed') ORDER BY seq LIMIT 1").get(row.board, row.series, row.seq);
-            if (earlier) break;
+            if (earlier) continue;
           }
         }
         const needs = safeJson(row.needs);
@@ -454,10 +468,16 @@ export class Relay {
       const more = rows.length > limit; if (more) rows.pop();
       const nextLast = rows.length ? rows.at(-1).seq : last;
       const next = more ? encodeCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, last: nextLast }) : null;
-      const firstSeq = (filter.board || filter.kind) ? (db.prepare(`SELECT MIN(seq) AS n FROM messages WHERE ${filter.board ? "board=?" : "1=1"}${filter.kind ? `${filter.board ? " AND " : " AND "}kind=?` : ""}`).get(...[filter.board,filter.kind].filter(Boolean)).n ?? null) : null;
+      const firstRows = (filter.board || filter.kind) ? db.prepare(`SELECT * FROM messages WHERE seq<=?${filter.to ? " AND recipient=?" : ""}${filter.board ? " AND board=?" : ""}${filter.kind ? " AND kind=?" : ""} ORDER BY seq`).all(...[boundary, filter.to, filter.board, filter.kind].filter((value) => value !== null)) : [];
+      const firstSeq = firstRows.find((row) => !authorization || canReadMessage(authorization, row))?.seq ?? null;
+      const prunedMeta = readMessagePruned(db);
+      const pruned = filter.board ? [filter.kind ?? "msg", ...(filter.kind ? [] : ["work"])].reduce((sum, kind) => {
+        const row = { board: filter.board, kind };
+        return sum + (!authorization || canReadMessage(authorization, row) ? (prunedMeta[retentionKey(filter.board, kind)] ?? 0) : 0);
+      }, 0) : 0;
       if (options.data === true && authorization && rows.some((row) => !canReadBody(authorization, row))) throw new Fault("denied", "Message body is outside this principal scope");
       const page = { items: rows.map((row) => this.#message(row, options.data === true)), total, visible: rows.length, complete: !more,
-        cursor: encodeCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, last: nextLast }), next, firstSeq, pruned: 0 };
+        cursor: encodeCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, last: nextLast }), next, firstSeq, pruned };
       return page;
     });
   }
@@ -493,7 +513,7 @@ export class Relay {
   }
   report(sid, report) {
     input(report && typeof report === "object" && !Array.isArray(report), "Invalid report");
-    const bytes = canonicalJson(report, LIMITS.reportBytes).bytes;
+    canonicalJson(report, LIMITS.reportBytes);
     input(Number.isSafeInteger(report.seq) && report.seq >= 1, "Invalid report");
     const rootKeys = Object.keys(report).sort();
     const expectedKeys = report.events === undefined ? ["agents", "board", "seq"] : ["agents", "board", "events", "seq"];
@@ -508,8 +528,9 @@ export class Relay {
         input(JSON.stringify(Object.keys(event ?? {}).sort()) === JSON.stringify(["code", "from", "mid", "seq", "state", "to", "type"]), "Invalid report event fields");
         input(event && Number.isSafeInteger(event.seq) && event.seq >= 1 && ["post", "claim", "release", "ack", "refusal"].includes(event.type), "Invalid report event");
         input(typeof event.from === "string" && typeof event.to === "string" && (event.mid === null || typeof event.mid === "string"), "Invalid report event endpoints");
-        input(Buffer.byteLength(event.from) <= LIMITS.workerAddressBytes && Buffer.byteLength(event.to) <= LIMITS.workerAddressBytes && (event.mid === null || Buffer.byteLength(event.mid) <= 128), "Invalid report event size");
-        input(event.state === null || ["pending", "claimed", "posted", "done", "failed", "rejected"].includes(event.state), "Invalid report event state");
+        input(Buffer.byteLength(event.from) <= LIMITS.workerAddressBytes && Buffer.byteLength(event.to) <= LIMITS.workerAddressBytes && (event.mid === null || /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(event.mid)), "Invalid report event size");
+        input(event.code === null || faultCodes.has(event.code), "Invalid report event code");
+        input(reportEventStates[event.type].includes(event.state) && (event.type === "refusal" ? event.code !== null : event.code === null), "Invalid report event state");
       }
     }
     for (const item of report.agents) {
@@ -530,6 +551,10 @@ export class Relay {
         const agent = db.prepare("SELECT id FROM agents WHERE id=? AND device=?").get(item.worker, device.id);
         if (!agent) throw new Fault("denied", "Report contains a foreign worker");
       }
+      const endpointExists = (endpoint) => endpoint === exactBoard || Boolean(db.prepare("SELECT 1 FROM agents WHERE id=? AND device=?").get(endpoint, device.id));
+      for (const event of report.events ?? []) {
+        if (!endpointExists(event.from) || !endpointExists(event.to)) throw new Fault("denied", "Report event contains a foreign endpoint");
+      }
       db.prepare("INSERT INTO reports(device,sid,epoch,seq,received,report) VALUES(?,?,?,?,?,?) ON CONFLICT(device) DO UPDATE SET sid=excluded.sid,epoch=excluded.epoch,seq=excluded.seq,received=excluded.received,report=excluded.report")
         .run(device.id, sid, session.epoch, report.seq, now, JSON.stringify(report));
       insertAudit(db, now, { type: "report", worker: session.worker, state: "reported" });
@@ -538,7 +563,7 @@ export class Relay {
           .run(device.id, sid, event.seq, now, event.type, event.from, event.to, event.mid, event.state, event.code);
         if (inserted.changes) insertAudit(db, now, { type: event.type, worker: event.to, mid: event.mid, code: event.code, from: event.from, to: event.to, state: event.state });
       }
-      return { accepted: true, receivedAt: now, staleAfter: LIMITS.reportStaleMs, seq: report.seq, bytes };
+      return { accepted: true, receivedAt: now, staleAfter: LIMITS.reportStaleMs, seq: report.seq };
     });
   }
 
@@ -606,10 +631,19 @@ export class Relay {
   purge(options) {
     options = assertOptions(options, ["before", "dry"], "purge");
     input(Number.isSafeInteger(options.before) && options.before >= 0, "Invalid purge cutoff"); input(options.dry === undefined || typeof options.dry === "boolean", "Invalid dry option");
-    return tx(this, "write", ({ db, now }) => {
+    return tx(this, options.dry ? "read" : "write", ({ db, now }) => {
       const cutoff = Math.min(options.before, now - this._store.policy.terminalRetentionMs);
-      const eligible = db.prepare("SELECT id FROM messages m WHERE state IN ('posted','done','failed','rejected') AND COALESCE(acked,init)<=? AND NOT EXISTS(SELECT 1 FROM send_keys k WHERE k.mid=m.id AND k.until>?) AND NOT EXISTS(SELECT 1 FROM rpc r WHERE r.mid=m.id AND r.until>?) LIMIT 10000").all(cutoff, now, now);
+      const eligible = db.prepare("SELECT id,board,kind FROM messages m WHERE state IN ('posted','done','failed','rejected') AND COALESCE(acked,init)<=? AND NOT EXISTS(SELECT 1 FROM send_keys k WHERE k.mid=m.id AND k.until>?) AND NOT EXISTS(SELECT 1 FROM rpc r WHERE r.mid=m.id AND r.until>?) LIMIT 10000").all(cutoff, now, now);
       if (!options.dry) {
+        const pruned = readMessagePruned(db);
+        for (const row of eligible) {
+          if (!row.board) continue;
+          const key = retentionKey(row.board, row.kind);
+          const count = pruned[key] ?? 0;
+          if (!Number.isSafeInteger(count) || count >= Number.MAX_SAFE_INTEGER) throw new Fault("full", "Message retention count is full");
+          pruned[key] = count + 1;
+        }
+        writeMeta(db, "messagePruned", pruned);
         db.prepare("DELETE FROM send_keys WHERE until<=?").run(now);
         for (const row of eligible) {
         db.prepare("DELETE FROM receipts WHERE mid=?").run(row.id); db.prepare("DELETE FROM leases WHERE mid=?").run(row.id); db.prepare("DELETE FROM messages WHERE id=?").run(row.id);

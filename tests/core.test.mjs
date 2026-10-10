@@ -122,3 +122,52 @@ test("A15/A52 purge protects retained replay references and removes eligible ter
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM receipts WHERE mid=?").get(admission.id).n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM leases WHERE mid=?").get(admission.id).n, 0);
 });
+
+test("A52 board history reports scoped cumulative pruning and dry run has no effects", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "history" }); t.after(() => relay.close());
+  const worker = relay.register("worker"); const session = relay.join(worker.id); const board = `host:${relay.device.id}`;
+  relay.post(session.id, board, { msg: "inbox" }); relay.post(session.id, board, { work: { task: 1 } });
+  relay.ack(session.id, relay.claim(session.id, { board }).id, "done");
+  relay._store.db.prepare("UPDATE messages SET init=0,acked=0").run();
+  const before = relay._store.db.prepare("SELECT key,value FROM meta ORDER BY key").all();
+  assert.equal(relay.purge({ before: Date.now(), dry: true }).eligible, 2);
+  assert.deepEqual(relay._store.db.prepare("SELECT key,value FROM meta ORDER BY key").all(), before);
+  assert.equal(relay.purge({ before: Date.now() }).removed, 2);
+  assert.equal(relay.purge({ before: Date.now() }).removed, 0);
+  assert.equal(relay.list({ board, kind: "msg" }).pruned, 1);
+  assert.equal(relay.list({ board, kind: "work" }).pruned, 1);
+  assert.equal(relay.list({ board }).pruned, 2);
+});
+
+test("A49 firstSeq follows the permitted board view", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "firstseq" }); t.after(() => relay.close());
+  const worker = relay.register("worker"); const session = relay.join(worker.id); const board = `host:${relay.device.id}`;
+  const hiddenInbox = relay.post(session.id, board, { msg: "private inbox" });
+  const visibleWork = relay.post(session.id, board, { work: { task: 1 } });
+  const hiddenSeq = relay.get(hiddenInbox.id).seq; const visibleSeq = relay.get(visibleWork.id).seq;
+  const authorization = { scopeKey: "work-only", principal: { grant: { inboxRead: [], workRead: [board], workers: [], inspect: {} } } };
+  for (const options of [{ board }, { board, kind: "work" }]) {
+    const page = relay.list(options, authorization);
+    assert.equal(page.total, 1);
+    assert.equal(page.firstSeq, visibleSeq);
+    assert.notEqual(page.firstSeq, hiddenSeq);
+  }
+  relay._store.db.prepare("INSERT INTO meta(key,value) VALUES('messagePruned',?)").run(JSON.stringify({ [`${board}|msg`]: 4, [`${board}|work`]: 2 }));
+  assert.equal(relay.list({ board }, authorization).pruned, 2);
+});
+
+test("A45 reports accept native endpoints and reject private or foreign event metadata", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "report" }); t.after(() => relay.close());
+  const worker = relay.register("worker"); const session = relay.join(worker.id); const boardId = `host:${relay.device.id}`;
+  const base = { agents: [{ worker: worker.id, state: "ready", free: 1, assignmentCount: 0 }], board: { id: boardId, inbox: 0, pending: 0, claimed: 0, terminal: 0 } };
+  const nativeEvent = { seq: 1, type: "post", from: worker.id, to: boardId, mid: "4f31b817-9d91-4d27-9ba1-54e66373a133", state: "posted", code: null };
+  const receipt = relay.report(session.id, { ...base, seq: 1, events: [nativeEvent] });
+  assert.deepEqual(Object.keys(receipt).sort(), ["accepted", "receivedAt", "seq", "staleAfter"]);
+  const auditCount = () => relay._store.db.prepare("SELECT COUNT(*) AS n FROM audit").get().n;
+  const before = auditCount();
+  assert.throws(() => relay.report(session.id, { ...base, seq: 2, events: [{ ...nativeEvent, seq: 2, code: "bearer-secret" }] }), { code: "input" });
+  assert.throws(() => relay.report(session.id, { ...base, seq: 2, events: [{ ...nativeEvent, seq: 2, mid: "private body" }] }), { code: "input" });
+  assert.throws(() => relay.report(session.id, { ...base, seq: 2, events: [{ ...nativeEvent, seq: 2, to: "foreign:worker:001" }] }), { code: "denied" });
+  assert.equal(auditCount(), before);
+  assert.equal(relay._store.db.prepare("SELECT seq FROM reports WHERE device=?").get(relay.device.id).seq, 1);
+});
