@@ -2,6 +2,8 @@ import {
   commitPulse,
   consumeSseBody,
   createUiState,
+  clearPrivateState as clearPrivateUiState,
+  denyPane,
   mergeSnapshotPages,
   parseBoardPage,
   parseSnapshot,
@@ -106,15 +108,9 @@ async function readBounded(response, controller) {
 }
 
 function clearPrivateState() {
-  state.token = null;
-  state.snapshot = null;
-  state.selectedBoard = null;
-  state.selectedNode = null;
-  state.pulses = [];
+  clearPrivateUiState(state);
   clearTimeout(pulseTimer);
   clearTimeout(paneRefreshTimer);
-  state.inbox = { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error: null, generation: state.inbox.generation + 1 };
-  state.bounties = { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error: null, generation: state.bounties.generation + 1 };
   stopStream();
   abortRequests();
   metaNode.textContent = "";
@@ -125,14 +121,16 @@ function clearPrivateState() {
   clearPane("bounties");
 }
 
-function handleAuthFault(error) {
+function handleAuthFault(error, token) {
   if (error?.code !== "auth" && error?.code !== "denied") return;
+  if (state.token !== token) return;
   clearPrivateState();
   byId("token").value = "";
   setConnection("error", error.code === "auth" ? "Authentication required" : "Denied");
 }
 
 async function requestJson(path, { signal, pane } = {}) {
+  const token = state.token;
   const controller = requestController(pane);
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_DEADLINE_MS);
@@ -144,7 +142,7 @@ async function requestJson(path, { signal, pane } = {}) {
   try {
     const response = await fetch(path, {
       method: "GET",
-      headers: { Authorization: `Bearer ${state.token}`, Accept: "application/json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       credentials: "omit",
       cache: "no-store",
       mode: "same-origin",
@@ -170,7 +168,7 @@ async function requestJson(path, { signal, pane } = {}) {
       throw error;
     }
     controller.abort();
-    if (error?.code === "auth" || error?.code === "denied") handleAuthFault(error);
+    if (error?.code === "auth" || (error?.code === "denied" && !pane)) handleAuthFault(error, token);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -452,6 +450,11 @@ async function loadPane(name, after, reuse = false) {
   } catch (error) {
     if (error.name === "AbortError") return;
     if (generation !== pane.generation) return;
+    if (error.code === "denied") {
+      if (!denyPane(state, name, generation)) return;
+      renderPane(name);
+      return;
+    }
     pane.error = error.code === "unavailable" ? "Unavailable" : error.code === "denied" ? "Denied" : error.code === "auth" ? "Authentication required" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid response";
   } finally {
     if (generation === pane.generation) {
@@ -554,10 +557,11 @@ function stopStream() {
 
 async function connectStream() {
   if (!state.token || !state.snapshot || pageHidden || streamTask) return;
+  const token = state.token;
   const generation = ++streamGeneration;
   streamTask = (async () => {
     let delay = 500;
-    while (state.token && !pageHidden && generation === streamGeneration) {
+    while (state.token === token && !pageHidden && generation === streamGeneration) {
       const controller = new AbortController();
       streamController = controller;
       try {
@@ -565,7 +569,7 @@ async function connectStream() {
         url.searchParams.set("cursor", state.snapshot.cursor);
         const response = await fetch(`${url.pathname}${url.search}`, {
           method: "GET",
-          headers: { Authorization: `Bearer ${state.token}`, Accept: "text/event-stream" },
+          headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
           credentials: "omit", cache: "no-store", mode: "same-origin", redirect: "error", signal: controller.signal,
         });
         if (!response.ok) {
@@ -600,11 +604,11 @@ async function connectStream() {
       } catch (error) {
         if (generation !== streamGeneration) break;
         if (controller.signal.aborted && (!state.token || pageHidden)) break;
-        if (error.code === "auth" || error.code === "denied") { handleAuthFault(error); break; }
+        if (error.code === "auth" || error.code === "denied") { handleAuthFault(error, token); break; }
         setConnection(error.code === "unavailable" ? "error" : "disconnected", error.message === "Failed to fetch" ? "Offline · reconnecting" : "Reconnecting");
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay = Math.min(delay * 2, 10_000);
-        if (!state.token || pageHidden || generation !== streamGeneration) break;
+        if (state.token !== token || pageHidden || generation !== streamGeneration) break;
         await refreshSnapshot();
       } finally {
         if (streamController === controller) streamController = null;

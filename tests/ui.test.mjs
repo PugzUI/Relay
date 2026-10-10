@@ -8,6 +8,8 @@ import {
   commitPulse,
   consumeSseBody,
   createUiState,
+  clearPrivateState,
+  denyPane,
   mergeSnapshotPages,
   parseBoardPage,
   parseFeedFrame,
@@ -160,7 +162,7 @@ test("A50 selecting and parsing shared Inbox pages creates no read receipt or lo
 test("A51 frontend sends in-memory auth to fixed same-origin routes and uses inert text nodes", async () => {
   const source = await readFile(new URL("../ui/main.mjs", import.meta.url), "utf8");
   const html = await readFile(new URL("../ui/index.html", import.meta.url), "utf8");
-  assert.match(source, /Authorization: `Bearer \$\{state\.token\}`/);
+  assert.match(source, /const token = state\.token;[\s\S]*?Authorization: `Bearer \$\{token\}`/);
   assert.match(source, /credentials: "omit"/);
   assert.match(source, /redirect: "error"/);
   assert.match(source, /new URL\("\/v1\/board", location\.origin\)/);
@@ -171,9 +173,84 @@ test("A51 frontend sends in-memory auth to fixed same-origin routes and uses ine
 
 test("A51 revoked credentials clear selected and cached private page state", async () => {
   const source = await readFile(new URL("../ui/main.mjs", import.meta.url), "utf8");
-  assert.match(source, /function clearPrivateState\(\)[\s\S]*?state\.inbox = \{ page: null/);
-  assert.match(source, /state\.bounties = \{ page: null/);
-  assert.match(source, /error\.code === "auth" \|\| error\.code === "denied"/);
+  assert.match(source, /error\?\.code === "auth" \|\| \(error\?\.code === "denied" && !pane\)/);
+  assert.match(source, /function handleAuthFault\(error, token\)[\s\S]*?state\.token !== token/);
+  assert.match(source, /const token = state\.token;[\s\S]*?Authorization: `Bearer \$\{token\}`, Accept: "text\/event-stream"/);
+  assert.match(source, /handleAuthFault\(error, token\)/);
+  assert.match(source, /if \(generation !== pane\.generation\) return;[\s\S]*?denyPane\(state, name, generation\)/);
+  const state = createUiState();
+  state.token = "revoked";
+  state.snapshot = parseSnapshot(snapshot());
+  selectBoard(state, "bounty");
+  state.inbox.page = { items: [{ id: "private-inbox" }] };
+  state.inbox.pages = [state.inbox.page];
+  state.bounties.page = { items: [{ id: "private-work" }] };
+  state.bounties.pages = [state.bounties.page];
+  clearPrivateState(state);
+  assert.equal(state.token, null);
+  assert.equal(state.snapshot, null);
+  assert.equal(state.selectedBoard, null);
+  assert.equal(state.inbox.page, null);
+  assert.deepEqual(state.inbox.pages, []);
+  assert.equal(state.bounties.page, null);
+  assert.deepEqual(state.bounties.pages, []);
+});
+
+test("A51 topology-only viewer keeps topology and credentials when a pane is denied", () => {
+  const state = createUiState();
+  state.token = "topology-only";
+  state.snapshot = parseSnapshot(snapshot());
+  selectBoard(state, "bounty");
+  const generation = state.inbox.generation;
+  state.inbox.page = { items: [{ id: "unauthorized" }] };
+  state.inbox.pages = [state.inbox.page];
+
+  assert.equal(denyPane(state, "inbox", generation), true);
+  assert.equal(state.token, "topology-only");
+  assert.ok(state.snapshot);
+  assert.equal(state.selectedBoard, "bounty");
+  assert.equal(state.inbox.page, null);
+  assert.deepEqual(state.inbox.pages, []);
+  assert.equal(state.inbox.error, "Denied");
+});
+
+test("A51 work-only reader retains permitted Bounties when Inbox is denied", () => {
+  const state = createUiState();
+  state.token = "work-only";
+  state.snapshot = parseSnapshot(snapshot());
+  selectBoard(state, "bounty");
+  state.inbox.page = { items: [{ id: "unauthorized-inbox" }] };
+  state.inbox.pages = [state.inbox.page];
+  state.bounties.page = { items: [{ id: "permitted-work" }] };
+  state.bounties.pages = [state.bounties.page];
+  const generation = state.inbox.generation;
+
+  assert.equal(denyPane(state, "inbox", generation), true);
+  assert.equal(state.token, "work-only");
+  assert.equal(state.inbox.page, null);
+  assert.deepEqual(state.inbox.pages, []);
+  assert.equal(state.inbox.error, "Denied");
+  assert.equal(state.bounties.page.items[0].id, "permitted-work");
+  assert.equal(state.bounties.pages.length, 1);
+});
+
+test("A51 a stale mid-read pane refusal cannot clear the newly selected scope", () => {
+  const state = createUiState();
+  state.token = "still-valid";
+  state.snapshot = parseSnapshot(snapshot({
+    boards: [board, { ...board, id: "host:dev-1" }],
+    totals: { devices: 1, agents: 1, boards: 2, links: 0 },
+    visible: { devices: 1, agents: 1, boards: 2, links: 0 },
+  }));
+  selectBoard(state, "bounty");
+  const oldGeneration = state.inbox.generation;
+  selectBoard(state, "host:dev-1");
+  state.inbox.page = { items: [{ id: "new-scope" }] };
+
+  assert.equal(denyPane(state, "inbox", oldGeneration), false);
+  assert.equal(state.token, "still-valid");
+  assert.equal(state.selectedBoard, "host:dev-1");
+  assert.equal(state.inbox.page.items[0].id, "new-scope");
 });
 
 test("native CORE snapshot, board pages, and feed deltas match the UI contract", {
