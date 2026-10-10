@@ -69,6 +69,47 @@ test("Client public calls are authenticated and reject lossy envelopes before se
   });
 });
 
+test("transport fixture preserves mutation uncertainty when a retry is refused", async () => {
+  await withTempDir(async (root) => {
+    const auth = credential();
+    const tokenFile = await privateFile(join(root, "token"), auth.token);
+    const calls = [];
+    const server = createServer(async (req, res) => {
+      if (req.url === "/v1/health") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ v: 1, authority: "fixture-authority", time: 1 }));
+        return;
+      }
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      calls.push(body);
+      if (calls.length === 1) {
+        req.socket.destroy();
+        return;
+      }
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ v: 1, rid: body.rid, ok: false, fault: { code: "rate", message: "Request rate limit exceeded" }, time: 2 }));
+    });
+    await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", (error) => error ? reject(error) : resolve()));
+    const client = await connect({ url: `http://127.0.0.1:${server.address().port}`, tokenFile, mode: "local" });
+    try {
+      await assert.rejects(client.send("east:worker:001", "west:worker:001", { msg: "one mutation" }), (error) => {
+        assert.ok(error instanceof Fault);
+        assert.equal(error.code, "uncertain");
+        assert.equal(error.context.id, calls[0]?.rid);
+        return true;
+      });
+      assert.equal(calls.length, 2);
+      assert.equal(calls[1].rid, calls[0].rid);
+      assert.deepEqual(calls[1], calls[0]);
+    } finally {
+      await client.close();
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
+
 test("strict config parser rejects duplicate fields and trailing JSON", () => {
   assert.throws(() => parseJsonStrict('{"mode":"local","mode":"lan"}'), (error) => error.code === "input");
   assert.throws(() => parseJsonStrict('{"mode":"local"} false'), (error) => error.code === "input");
