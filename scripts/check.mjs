@@ -12,6 +12,8 @@ function run(command, args, options = {}) {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 30_000,
+    killSignal: "SIGKILL",
     ...options,
   });
   if (result.error) throw result.error;
@@ -45,7 +47,7 @@ const expectedExports = ["Broker", "Client", "Fault", "LIMITS", "Relay", "connec
 const entrySource = await readFile(join(root, "src/index.mjs"), "utf8");
 const actualExports = [...entrySource.matchAll(/export\s*\{([^}]+)\}/g)]
   .flatMap((match) => match[1].split(","))
-  .map((name) => name.trim().split(/\s+as\s+/)[0])
+  .map((name) => name.trim().split(/\s+as\s+/).at(-1))
   .sort();
 if (JSON.stringify(actualExports) !== JSON.stringify([...expectedExports].sort())) {
   failures.push(`exports: expected ${expectedExports.join(", ")}; found ${actualExports.join(", ")}`);
@@ -133,13 +135,36 @@ const packScratch = await mkdtemp(join(tmpdir(), "relay-check-"));
 try {
   const npmCli = process.env.npm_execpath;
   if (!npmCli) throw new Error("run packaging check through npm run check");
-  const pack = run(process.execPath, [npmCli, "pack", "--dry-run", "--ignore-scripts", "--silent"], {
+  const pack = run(process.execPath, [npmCli, "pack", "--dry-run", "--ignore-scripts", "--json"], {
     env: { ...process.env, npm_config_cache: packScratch, npm_config_logs_max: "0" },
   });
   if (pack.status !== 0) {
     failures.push(`packaging:\n${pack.stdout}${pack.stderr}`);
   } else {
     try {
+      const packages = JSON.parse(pack.stdout);
+      if (!Array.isArray(packages) || packages.length !== 1 || !Array.isArray(packages[0]?.files)) {
+        throw new Error("npm returned an invalid package file manifest");
+      }
+      const packedPaths = packages[0].files.map((file) => {
+        if (typeof file?.path !== "string") throw new Error("npm returned an invalid package path");
+        return file.path;
+      });
+      const forbiddenPaths = packedPaths.filter((path) => {
+        const allowed = ["package.json", "README.md", "LICENSE"].includes(path)
+          || path.startsWith("src/") || path.startsWith("ui/");
+        return !allowed || path.split("/").includes("..")
+          || /(?:^|\/)(?:\.git|\.relay|\.local|node_modules|coverage|tests?|fixtures?)(?:\/|$)/i.test(path)
+          || /(?:^|\/)(?:\.env(?:\.[^/]*)?|token(?:\.(?:txt|json))?|credentials(?:\.json)?|registry\.json)$/i.test(path)
+          || /\.(?:sqlite|db)(?:-[^/]*)?$|\.(?:pem|key|p12|pfx|log|tgz|bak|orig|tmp)$/i.test(path);
+      });
+      if (forbiddenPaths.length) {
+        failures.push(`packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`);
+      }
+      const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts",
+        ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
+      const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));
+      if (missingPacked.length) failures.push(`packaging: missing runtime files ${JSON.stringify(missingPacked)}`);
       const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
       const expectedFiles = ["src/", "ui/", "LICENSE"];
       if (JSON.stringify(manifest.files) !== JSON.stringify(expectedFiles)) {
@@ -158,7 +183,7 @@ try {
         await stat(join(root, path));
       }
       if (!failures.some((failure) => failure.startsWith("packaging:"))) {
-        console.log("packaging: npm dry run passed; runtime allowlist is src/, ui/, LICENSE");
+        console.log(`packaging: validated ${packedPaths.length} emitted file(s), runtime entries, and private-artifact exclusions`);
       }
     } catch (error) {
       failures.push(`packaging: manifest/files check failed (${error.message})`);
