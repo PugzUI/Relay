@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node --test",
+    "test": "node --test tests",
     "demo": "node scripts/demo.mjs",
     "capture": "node scripts/capture.mjs"
   },
