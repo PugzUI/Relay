@@ -129,9 +129,11 @@ browser. It uses a fresh temporary browser profile and the UI's bearer-token
 form. The URL defaults to `http://127.0.0.1:4200`; set `RELAY_CAPTURE_URL` to
 select another loopback origin. Set `RELAY_CAPTURE_TOKEN_FILE` to a private
 file containing the demo token and `RELAY_BROWSER` to select a browser
-executable. Capture fails on authentication, loading, empty board panes, or
-unavailable data. A successful run writes wide and narrow screenshots plus
-actual browser, runtime, viewport, and timestamp metadata under `docs/media/`.
+executable. Capture fails on authentication, loading, empty board panes, origin
+or geometry mismatch, horizontal overflow, browser runtime exceptions, or
+unavailable data. A successful run writes wide and narrow topology screenshots,
+a narrow board view, and measured browser, runtime, viewport, pixel, board, and
+timestamp metadata under `docs/media/`.
 No screenshot is included until a real disposable server produces one.
 
 The supported runtime contract is Node.js `>=24.0.0` on a local filesystem.

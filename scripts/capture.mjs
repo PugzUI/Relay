@@ -9,6 +9,7 @@ const project = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(project, "docs/media");
 const ui = resolve(project, "ui/index.html");
 const timeoutMs = 30_000;
+const maxProtocolBytes = 1_048_576;
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 
 if (isMain) await capture();
@@ -22,6 +23,43 @@ export function captureUrl(value = process.env.RELAY_CAPTURE_URL ?? "http://127.
     throw new Error("RELAY_CAPTURE_URL must be a loopback origin without credentials, path, query, or fragment");
   }
   return url.origin;
+}
+
+export function capturePageState(state, { origin, width, height }) {
+  if (!state || state.origin !== origin || state.blank || !state.ready
+    || state.viewportWidth !== width || state.viewportHeight !== height
+    || state.documentWidth !== width || state.horizontalOverflow
+    || state.connection !== "connected" || !state.selectedBoard
+    || state.loading || state.error || state.topologyItems < 1 || state.inbox < 1 || state.bounties < 1
+    || state.inboxState !== "Ready" || state.bountiesState !== "Ready") {
+    throw new Error("capture page state, selected board, pane data, origin, or viewport is invalid");
+  }
+  return {
+    origin: state.origin,
+    selectedBoard: state.selectedBoard,
+    viewport: { width: state.viewportWidth, height: state.viewportHeight },
+    document: { width: state.documentWidth, height: state.documentHeight, horizontalOverflow: state.horizontalOverflow },
+    topologyItems: state.topologyItems,
+    panes: { inboxRows: state.inbox, bountiesRows: state.bounties },
+    connection: state.connection,
+    paneStates: { inbox: state.inboxState, bounties: state.bountiesState },
+  };
+}
+
+export function captureEnvironment(source = process.env) {
+  return Object.fromEntries(Object.entries(source).filter(([key]) =>
+    !/(?:^DISPLAY$|WAYLAND|XAUTHORITY|DBUS_SESSION|XDG_RUNTIME|XDG_SESSION|HYPRLAND|SWAYSOCK|SESSION_MANAGER|DESKTOP_SESSION|XDG_CURRENT_DESKTOP|^RELAY_CAPTURE_)/i.test(key)));
+}
+
+export function pngDimensions(image) {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (image.length < 24 || !image.subarray(0, 8).equals(signature) || image.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("browser did not return a PNG screenshot");
+  }
+  const width = image.readUInt32BE(16);
+  const height = image.readUInt32BE(20);
+  if (!width || !height || width > 4096 || height > 4096) throw new Error("browser returned invalid screenshot dimensions");
+  return { width, height };
 }
 
 export async function readCaptureToken(path = process.env.RELAY_CAPTURE_TOKEN_FILE) {
@@ -61,14 +99,16 @@ async function capture() {
     "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0",
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE [::1]",
     `--user-data-dir=${profile}`, "about:blank",
-  ], { shell: false, detached: process.platform !== "win32", stdio: ["ignore", "ignore", "ignore"] });
+  ], { shell: false, detached: process.platform !== "win32", stdio: ["ignore", "ignore", "ignore"], env: captureEnvironment() });
   let launchError = false;
   child.once("error", () => { launchError = true; });
   let cdp;
   let failure;
+  let runtimeExceptions = 0;
   try {
     const endpoint = await devtoolsEndpoint(profile, child, () => launchError);
     cdp = await Cdp.connect(endpoint);
+    cdp.addEventListener("Runtime.exceptionThrown", () => { runtimeExceptions += 1; });
     const ready = new Promise((resolveReady) => {
       cdp.once("Page.loadEventFired", resolveReady);
       setTimeout(resolveReady, 1_500).unref();
@@ -77,51 +117,114 @@ async function capture() {
     await cdp.call("Runtime.enable");
     await cdp.call("Page.navigate", { url: target });
     await ready;
-    await cdp.evaluate("document.getElementById('token')?.focus()");
-    await cdp.call("Input.insertText", { text: token });
-    await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await waitForConnectedData(cdp);
+    await cdp.evaluate(`(() => {
+      const input = document.getElementById("token");
+      const form = document.getElementById("auth-form");
+      if (location.origin !== ${JSON.stringify(target)} || location.pathname !== "/"
+        || !(input instanceof HTMLInputElement) || !(form instanceof HTMLFormElement)) {
+        throw new Error("unexpected capture login origin or form");
+      }
+      form.addEventListener("submit", (event) => event.preventDefault(), { once: true });
+      input.value = ${JSON.stringify(token)};
+      form.requestSubmit();
+    })()`);
+    await waitForConnectedData(cdp, target);
 
-    const viewports = [
-      { name: "topology.png", width: 1440, height: 1000, mobile: false },
-      { name: "topology-narrow.png", width: 390, height: 844, mobile: true },
+    const views = [
+      { name: "topology.png", width: 1440, height: 1000, mobile: false, scroll: false },
+      { name: "topology-narrow.png", width: 390, height: 844, mobile: true, scroll: false },
+      { name: "board-narrow.png", width: 390, height: 1200, mobile: true, scroll: true },
     ];
-    for (const viewport of viewports) {
+    const measured = {};
+    for (const viewport of views) {
       await cdp.call("Emulation.setDeviceMetricsOverride", {
         width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile,
       });
-      await waitForConnectedData(cdp);
+      await cdp.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      await waitForConnectedData(cdp, target);
+      if (viewport.scroll) await cdp.evaluate("document.querySelector('.boards-section').scrollIntoView({ block: 'start' })");
+      const state = await cdp.evaluate(`(() => {
+        const root = document.documentElement;
+        const inboxStatus = document.getElementById("inbox-status");
+        const bountiesStatus = document.getElementById("bounties-status");
+        return {
+          origin: location.origin,
+          blank: !document.body || !document.body.children.length,
+          ready: document.readyState === "complete",
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          documentWidth: root.scrollWidth,
+          documentHeight: root.scrollHeight,
+          horizontalOverflow: root.scrollWidth > root.clientWidth,
+          connection: document.getElementById("connection")?.dataset.state ?? "missing",
+          selectedBoard: document.getElementById("board-picker")?.value ?? "",
+          topologyItems: document.querySelectorAll("#topology [data-entity], #topology [data-board]").length,
+          inbox: document.querySelectorAll("#inbox-rows > li").length,
+          bounties: document.querySelectorAll("#bounties-rows > li").length,
+          inboxState: inboxStatus?.dataset.state || inboxStatus?.textContent || "missing",
+          bountiesState: bountiesStatus?.dataset.state || bountiesStatus?.textContent || "missing",
+          loading: [inboxStatus, bountiesStatus].some((node) => node?.textContent === "Loading"),
+          error: [document.getElementById("connection"), document.getElementById("topology-status"), inboxStatus, bountiesStatus]
+            .some((node) => node?.dataset.state === "error"),
+        };
+      })()`);
+      measured[viewport.name] = capturePageState(state, { origin: target, width: viewport.width, height: viewport.height });
+      const accessibility = await cdp.evaluate(`(() => {
+        const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const probe = document.createElement("span");
+        probe.style.animation = "capture-probe 2s infinite";
+        document.body.append(probe);
+        const motion = getComputedStyle(probe);
+        const result = { reduce, animation: motion.animationDuration, iterations: motion.animationIterationCount };
+        probe.remove();
+        return result;
+      })()`);
+      if (!accessibility.reduce || accessibility.animation.split(",").some((duration) => Number.parseFloat(duration) > 0.01)
+        || accessibility.iterations.split(",").some((count) => Number.parseFloat(count) > 1)) {
+        throw new Error("reduced-motion browser emulation was not applied");
+      }
+      if (viewport.name === "topology-narrow.png") {
+        await cdp.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+        await cdp.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+        const focus = await cdp.evaluate(`(() => {
+          const active = document.activeElement;
+          return { visible: active instanceof HTMLElement && active.matches(":focus-visible"), outline: active instanceof HTMLElement && getComputedStyle(active).outlineStyle !== "none" };
+        })()`);
+        if (!focus.visible || !focus.outline) throw new Error("keyboard focus is not visibly outlined on a real control");
+      }
       const result = await cdp.call("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
       if (typeof result.data !== "string" || result.data.length > 16_000_000) throw new Error("browser returned an invalid or oversized screenshot");
       const image = Buffer.from(result.data, "base64");
-      if (image.length < 8 || !image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-        throw new Error("browser did not return a PNG screenshot");
-      }
+      const pixels = pngDimensions(image);
+      if (pixels.width !== viewport.width || pixels.height !== viewport.height) throw new Error("screenshot pixel dimensions do not match the measured viewport");
+      measured[viewport.name].pixels = pixels;
+      if (runtimeExceptions) throw new Error(`page raised ${runtimeExceptions} uncaught runtime exception(s)`);
       await writeFile(join(staging, viewport.name), image, { mode: 0o600, flag: "wx" });
     }
+    if (runtimeExceptions) throw new Error(`page raised ${runtimeExceptions} uncaught runtime exception(s)`);
     const evidence = {
       capturedAt: new Date().toISOString(),
       browser: version,
       runtime: process.version,
-      viewport: { wide: { width: 1440, height: 1000 }, narrow: { width: 390, height: 844 } },
-      origin: target,
+      views: measured,
       profile: "fresh temporary Chromium profile",
       authenticated: true,
-      data: "connected topology with Inbox and Bounties rows",
+      runtimeExceptions,
+      reducedMotion: "emulated and verified",
+      keyboardFocus: "visible outline verified on a real control",
     };
     await writeFile(join(staging, "capture.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: "wx" });
     await mkdir(output, { recursive: true });
-    for (const name of ["topology.png", "topology-narrow.png", "capture.json"]) {
+    for (const name of ["topology.png", "topology-narrow.png", "board-narrow.png", "capture.json"]) {
       await rename(join(staging, name), join(output, name));
     }
-    process.stdout.write(`${JSON.stringify({ files: ["docs/media/topology.png", "docs/media/topology-narrow.png", "docs/media/capture.json"], browser: version, runtime: process.version })}\n`);
+    process.stdout.write(`${JSON.stringify({ files: ["docs/media/topology.png", "docs/media/topology-narrow.png", "docs/media/board-narrow.png", "docs/media/capture.json"], browser: version, runtime: process.version })}\n`);
   } catch (error) {
     failure = error;
     throw error;
   } finally {
     let cleanupFailed = false;
-    cdp?.close();
+    try { await cdp?.close(); } catch { cleanupFailed = true; }
     try { if (child.pid) await stopOwnedBrowser(child); }
     catch { cleanupFailed = true; }
     for (const path of [profile, staging]) {
@@ -135,7 +238,7 @@ async function capture() {
   }
 }
 
-async function waitForConnectedData(cdp) {
+async function waitForConnectedData(cdp, expectedOrigin) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = await cdp.evaluate(`(() => {
@@ -145,7 +248,10 @@ async function waitForConnectedData(cdp) {
       const bountyStatus = document.getElementById("bounties-status");
       return {
         ready: document.readyState === "complete",
+        origin: location.origin,
+        blank: !document.body || !document.body.children.length,
         connection: status?.dataset.state ?? "missing",
+        selectedBoard: document.getElementById("board-picker")?.value ?? "",
         topology: topology?.querySelectorAll("[data-entity], [data-board]").length ?? 0,
         inbox: document.querySelectorAll("#inbox-rows > li").length,
         bounties: document.querySelectorAll("#bounties-rows > li").length,
@@ -155,8 +261,8 @@ async function waitForConnectedData(cdp) {
       };
     })()`);
     if (state.error) throw new Error("Relay denied authentication or returned an error while loading capture data");
-    if (state.ready && state.connection === "connected" && state.topology > 0
-      && state.inbox > 0 && state.bounties > 0 && !state.loading) return;
+    if (state.ready && state.origin === expectedOrigin && !state.blank && state.connection === "connected"
+      && state.topology > 0 && state.selectedBoard && state.inbox > 0 && state.bounties > 0 && !state.loading) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 200));
   }
   throw new Error("timed out waiting for connected topology, Inbox, and Bounties data");
@@ -187,7 +293,7 @@ function browserVersion(executable) {
   return version;
 }
 
-async function devtoolsEndpoint(profile, child, hasLaunchError) {
+export async function devtoolsEndpoint(profile, child, hasLaunchError) {
   const activeFile = join(profile, "DevToolsActivePort");
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
@@ -198,11 +304,10 @@ async function devtoolsEndpoint(profile, child, hasLaunchError) {
       if (Number.isInteger(port) && port > 0 && port <= 65_535 && /^\/devtools\/browser\//.test(browserPath)) {
         const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1_000), redirect: "error" });
         if (response.ok) {
-          const body = await response.text();
-          if (body.length > 65_536) throw new Error("browser target list exceeds its limit");
+          const body = await readBoundedResponse(response, 65_536);
           const targets = JSON.parse(body);
           const page = targets.find((item) => item.type === "page" && typeof item.webSocketDebuggerUrl === "string");
-          if (page) return page.webSocketDebuggerUrl;
+          if (page && validDebuggerUrl(page.webSocketDebuggerUrl, port)) return page.webSocketDebuggerUrl;
         }
       }
     } catch { /* browser is still starting */ }
@@ -211,7 +316,34 @@ async function devtoolsEndpoint(profile, child, hasLaunchError) {
   throw new Error("timed out waiting for the owned browser debugging endpoint");
 }
 
-async function stopOwnedBrowser(child) {
+async function readBoundedResponse(response, limit) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("browser target list has no response body");
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw new Error("browser target list exceeds its limit");
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks, size).toString("utf8");
+}
+
+function validDebuggerUrl(value, port) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "ws:" && url.hostname === "127.0.0.1" && Number(url.port) === port
+      && /^\/devtools\/page\//.test(url.pathname) && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+export async function stopOwnedBrowser(child) {
   if (child.exitCode !== null) return;
   const signal = (name) => {
     try {
@@ -228,7 +360,7 @@ async function stopOwnedBrowser(child) {
 
 function delay(ms) { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 
-class Cdp extends EventTarget {
+export class Cdp extends EventTarget {
   static async connect(endpoint) {
     const client = new Cdp();
     client.socket = new WebSocket(endpoint);
@@ -240,6 +372,11 @@ class Cdp extends EventTarget {
     client.pending = new Map();
     client.nextId = 0;
     client.socket.addEventListener("message", ({ data }) => {
+      if (typeof data !== "string" || Buffer.byteLength(data, "utf8") > maxProtocolBytes) {
+        client.fail(new Error("browser protocol frame exceeds its limit"));
+        client.socket.close();
+        return;
+      }
       let message;
       try { message = JSON.parse(data); } catch { client.fail(new Error("invalid browser protocol response")); return; }
       if (message.id) {
@@ -256,14 +393,22 @@ class Cdp extends EventTarget {
   }
 
   call(method, params = {}) {
+    if (this.pending.size >= 64) return Promise.reject(new Error("too many pending browser commands"));
     const id = ++this.nextId;
+    const payload = JSON.stringify({ id, method, params });
+    if (Buffer.byteLength(payload, "utf8") > maxProtocolBytes) return Promise.reject(new Error("browser command exceeds its limit"));
     return new Promise((resolveCall, rejectCall) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         rejectCall(new Error(`browser command timed out: ${method}`));
       }, 5_000);
       this.pending.set(id, { resolve: resolveCall, reject: rejectCall, timer });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      try { this.socket.send(payload); }
+      catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        rejectCall(new Error("could not send browser command", { cause: error }));
+      }
     });
   }
 
@@ -283,5 +428,14 @@ class Cdp extends EventTarget {
     this.pending?.clear();
   }
 
-  close() { this.socket?.close(); this.fail(new Error("browser connection closed")); }
+  async close() {
+    if (!this.socket) return;
+    this.fail(new Error("browser connection closed"));
+    if (this.socket.readyState === WebSocket.CLOSED) return;
+    const closed = new Promise((resolveClosed) => this.socket.addEventListener("close", resolveClosed, { once: true }));
+    this.socket.close();
+    if (!await Promise.race([closed.then(() => true), delay(1_000).then(() => false)])) {
+      throw new Error("browser connection did not close within its limit");
+    }
+  }
 }
