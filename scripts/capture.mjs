@@ -12,8 +12,6 @@ const timeoutMs = 30_000;
 const maxProtocolBytes = 1_048_576;
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 
-if (isMain) await capture();
-
 export function captureUrl(value = process.env.RELAY_CAPTURE_URL ?? "http://127.0.0.1:4200") {
   let url;
   try { url = new URL(value); } catch { throw new Error("RELAY_CAPTURE_URL must be a valid loopback origin"); }
@@ -32,7 +30,15 @@ export function capturePageState(state, { origin, width, height }) {
     || state.connection !== "connected" || !state.selectedBoard
     || state.loading || state.error || state.topologyItems < 1 || state.inbox < 1 || state.bounties < 1
     || state.inboxState !== "Ready" || state.bountiesState !== "Ready") {
-    throw new Error("capture page state, selected board, pane data, origin, or viewport is invalid");
+    throw new Error(`capture page state is invalid: ${JSON.stringify({
+      expected: { width, height },
+      viewport: { width: state?.viewportWidth, height: state?.viewportHeight },
+      document: { width: state?.documentWidth, height: state?.documentHeight, overflow: state?.horizontalOverflow },
+      originMatches: state?.origin === origin, ready: state?.ready, connection: state?.connection,
+      selectedBoardPresent: Boolean(state?.selectedBoard), loading: state?.loading, error: state?.error,
+      topologyItems: state?.topologyItems, inboxRows: state?.inbox, workRows: state?.bounties,
+      inboxReady: state?.inboxState === "Ready", workReady: state?.bountiesState === "Ready",
+    })}`);
   }
   return {
     origin: state.origin,
@@ -141,6 +147,7 @@ async function capture() {
         width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: viewport.mobile,
       });
       await cdp.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      await cdp.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
       await waitForConnectedData(cdp, target);
       if (viewport.scroll) await cdp.evaluate("document.querySelector('.boards-section').scrollIntoView({ block: 'start' })");
       const state = await cdp.evaluate(`(() => {
@@ -439,3 +446,5 @@ export class Cdp extends EventTarget {
     }
   }
 }
+
+if (isMain) await capture();

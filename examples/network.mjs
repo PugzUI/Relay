@@ -170,6 +170,7 @@ async function createLoopbackCertificate(certFile, keyFile) {
   ], { shell: false, stdio: "ignore", timeout: 10_000 });
   if (result.error || result.status !== 0) throw new Error("OpenSSL could not create the disposable loopback TLS certificate");
   await chmod(keyFile, 0o600);
+  await chmod(certFile, 0o600);
 }
 
 async function startHttpsForwarder(certFile, keyFile, portNumber, targetPort) {

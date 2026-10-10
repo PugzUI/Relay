@@ -286,7 +286,7 @@ async function boardRequest(state, req, res, url, principal, deadline) {
       const current = await loadRegistry(state.config.credentialsFile); state.registry = current;
       authorizeBoardRead(current, principal, options.board, options.kind, includeData);
       if (cancelled.signal.aborted) fail("unavailable", "Board request was cancelled");
-      asJSON(res, 200, { v: 1, result: page, time: Date.now() });
+      asJSON(res, 200, page);
     } finally { res.removeListener("close", cancel); cancelled.abort(); await remote.close(); }
     return;
   }
@@ -299,7 +299,7 @@ async function boardRequest(state, req, res, url, principal, deadline) {
     if (current.id !== principal.id || current.scopeKey !== auth.scopeKey) throw new Fault("auth", "Credential was revoked");
     authorize(currentRegistry, current, "list", args);
   } });
-  asJSON(res, 200, { v: 1, result: outcome.result, time: Date.now() });
+  asJSON(res, 200, outcome.result);
 }
 function validPage(page, board, kind) {
   return object(page) && Array.isArray(page.items) && Number.isSafeInteger(page.total) && Number.isSafeInteger(page.visible) && typeof page.complete === "boolean" && typeof page.cursor === "string" && (page.next === null || typeof page.next === "string") && page.items.every((item) => object(item) && item.board === board && item.kind === kind);
