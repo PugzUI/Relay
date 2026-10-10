@@ -629,6 +629,14 @@ export class Relay {
           terminal: count("work", "done") + count("work", "failed") + count("work", "rejected"),
           reported: Boolean(report), receivedAt: report?.received ?? null };
       });
+      for (const [device, report] of reports) {
+        if (device === this.device.id || (filter.device && filter.device !== device)) continue;
+        const counts = reportData.get(device).board;
+        boards.push({ id: counts.id, kind: "host", device, authority: this.authority,
+          inbox: counts.inbox, pending: counts.pending, claimed: counts.claimed, terminal: counts.terminal,
+          reported: true, receivedAt: report.received });
+      }
+      boards.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
       const links = db.prepare("SELECT m.id,m.sender,m.recipient,m.board,m.init,s.worker FROM messages m JOIN leases l ON l.mid=m.id AND l.state='live' JOIN sessions s ON s.id=l.sid JOIN agents a ON a.id=s.worker WHERE m.state='claimed' AND l.until>? AND s.ended IS NULL AND s.epoch=a.epoch AND (? IS NULL OR a.device=?) ORDER BY m.id")
         .all(tokenTime, filter.device, filter.device).map((row) => ({ id: `assignment:${row.id}`, from: row.board ?? row.sender ?? "", to: row.worker, kind: row.board ? "board" : "addressed", state: "active", mid: row.id, time: row.init }));
       const visibleAgents = agents.filter((a) => a.id > lastAgent).slice(0, limit);

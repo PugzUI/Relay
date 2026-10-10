@@ -424,9 +424,38 @@ async function handle(state, req, res, deadline, onStreamStart) {
       const snapshot = await loadRegistry(state.config.credentialsFile); state.registry = snapshot;
       const authorization = authorize(snapshot, principal, "snapshot", { options });
       const result = await state.feed.snapshot(options, authorization);
+      const remoteBoards = result.boards.filter((board) => board.kind === "host" && board.device !== state.relay.device.id);
+      if (remoteBoards.length) {
+        const boardsByView = new Map();
+        for (const board of remoteBoards) {
+          const view = state.config.views.find((candidate) => candidate.deviceId === board.device && candidate.boards.includes(board.id));
+          if (!view) continue;
+          boardsByView.set(view, [...(boardsByView.get(view) ?? []), board]);
+        }
+        const cancelled = new AbortController();
+        const cancel = () => cancelled.abort();
+        res.once("close", cancel);
+        try {
+          await Promise.all([...boardsByView].map(async ([view, boards]) => {
+            let client;
+            try {
+              if (performance.now() >= deadline) fail("timeout", "Request deadline elapsed");
+              client = await createFixedClient({ url: view.url, tokenFile: view.tokenFile, ...(view.caFile ? { caFile: view.caFile } : {}), mode: "tailscale" }, cancelled.signal, { checkHealth: true, deadline });
+              if (performance.now() >= deadline) fail("timeout", "Request deadline elapsed");
+              if (!client.authority || client.authority === state.relay.authority) fail("unavailable", "Fixed board view is unavailable");
+              for (const board of boards) board.authority = client.authority;
+            } catch (error) {
+              if (cancelled.signal.aborted) throw new Fault("unavailable", "Snapshot request was cancelled");
+              if (performance.now() >= deadline) throw new Fault("timeout", "Request deadline elapsed");
+              if (!(error instanceof Fault) || !["auth", "denied", "tls", "protocol", "unavailable", "timeout", "rate", "full"].includes(error.code)) throw error;
+              // Accepted reports remain visible; unavailable body reads fail separately.
+            } finally { await client?.close(); }
+          }));
+        } finally { res.removeListener("close", cancel); cancelled.abort(); }
+      }
       const latest = loadRegistrySync(state.config.credentialsFile); state.registry = latest;
       const current = authenticate(latest, uniqueAuthorization(req));
-      if (current.id !== principal.id) fail("auth", "Credential was revoked");
+      if (current.id !== principal.id || current.scopeKey !== authorization.scopeKey) fail("auth", "Credential was revoked");
       authorize(latest, current, "snapshot", { options });
       asJSON(res, 200, result); return;
     }
