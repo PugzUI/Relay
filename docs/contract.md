@@ -741,6 +741,15 @@ interface PoolWorkerInput {
 }
 ```
 
+Pool obtains its canonical local store root through CORE's internal
+`relayRoot(options.local)` seam. It returns only the open Relay handle's
+immutable `StoreHandle.root`, refusing invalid or closed handles without
+exposing the database or store object. It is not a public package export or
+wire operation and never appears in snapshots, feeds, or board records.
+Validate this root before reserving a launch or spawning its owned child;
+only the child's private bootstrap receives it. Do not infer it from cwd,
+task data, URLs, or Relay private fields.
+
 `createPool` is internal and accepts one instance per local store. `serve()`
 holds the store's broker lock and is the only network owner that may construct
 the configured host Pool. A second Pool for the same `Relay` handle returns
@@ -1085,6 +1094,7 @@ fingerprint(value: unknown) -> string // lowercase SHA-256 hex
 open(options: OpenOptions) -> Relay
 setup(options: SetupOptions) -> Device
 openForBroker(options: { root: string; role: StoreRole }) -> Relay
+relayRoot(relay: Relay) -> string
 dispatchRpc(relay: Relay, call: RpcCall) -> RpcOutcome
 dispatchLocalPool(relay: Relay, call: LocalPoolCall) -> RpcOutcome
 inspectAttempt(relay: Relay, input: AttemptInput, authorization: Authorization | null) -> AttemptStatus | null
