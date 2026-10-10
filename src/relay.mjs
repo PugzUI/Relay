@@ -169,21 +169,29 @@ function releaseSessionClaims(db, sid, epoch, now) {
 export class Relay {
   constructor(store) { this._store = store; this.device = store.device; this.authority = store.authority; }
 
-  register(runtime, options) {
+  register(runtime, options, authorization = null) {
     validateRuntime(runtime); options = assertOptions(options, ["slot", "caps"], "register");
     const caps = validateTags(options.caps ?? []);
     return tx(this, "write", ({ db, now }) => {
-      const device = readMeta(db, "device");
+      const localDevice = readMeta(db, "device");
+      const bound = authorization?.principal?.grant?.register?.[0];
+      const device = bound
+        ? db.prepare("SELECT * FROM devices WHERE id=? AND name=?").get(bound.deviceId, bound.deviceName)
+        : localDevice;
+      if (!device) throw new Fault("denied", "Registration device is not enrolled");
+      const local = device.id === localDevice.id;
+      if (!local && (readMeta(db, "role") !== "hub" || bound.allocate || options.slot === undefined || options.slot === "prime")) throw new Fault("denied", "Remote registration requires an enrolled numbered slot");
       const counters = readMeta(db, "slotCounters") ?? {};
       let slot = options.slot;
       if (slot === undefined) {
+        if (!local || (bound && !bound.allocate)) throw new Fault("denied", "Registration slot allocation is not permitted");
         let next = BigInt(counters[runtime] ?? "0") + 1n;
         while (db.prepare("SELECT 1 FROM agents WHERE device=? AND runtime=? AND slot=?").get(device.id, runtime, next.toString().padStart(3, "0"))) next++;
         slot = next.toString().padStart(3, "0");
         counters[runtime] = next.toString(); writeMeta(db, "slotCounters", counters);
       } else {
         validateSlot(slot, { prime: true });
-        if (slot !== "prime" && BigInt(slot) > BigInt(counters[runtime] ?? "0")) { counters[runtime] = BigInt(slot).toString(); writeMeta(db, "slotCounters", counters); }
+        if (local && slot !== "prime" && BigInt(slot) > BigInt(counters[runtime] ?? "0")) { counters[runtime] = BigInt(slot).toString(); writeMeta(db, "slotCounters", counters); }
       }
       const worker = `${device.name}:${runtime}:${slot}`;
       validateAddress(worker);
@@ -286,7 +294,11 @@ export class Relay {
       const session = getSession(db, sid, now);
       const sender = session.worker;
       if (kind === "send" && !db.prepare("SELECT 1 FROM agents WHERE id=?").get(target)) throw new Fault("target", "Recipient is not registered");
-      if (kind === "post" && !db.prepare("SELECT 1 FROM boards WHERE id=?").get(target)) throw new Fault("board", "Board does not exist");
+      if (kind === "post") {
+        const boardRow = db.prepare("SELECT * FROM boards WHERE id=?").get(target);
+        if (!boardRow) throw new Fault("board", "Board does not exist");
+        if (boardRow.kind === "host" && (boardRow.device !== readMeta(db, "device").id || boardRow.device !== db.prepare("SELECT device FROM agents WHERE id=?").get(sender)?.device)) throw new Fault("denied", "Host board is not locally writable");
+      }
       if (key !== null) {
         db.prepare("DELETE FROM send_keys WHERE until<=?").run(now);
         const prior = db.prepare("SELECT k.*,m.init FROM send_keys k JOIN messages m ON m.id=k.mid WHERE k.sender=? AND k.key=?").get(sender, key);
@@ -326,6 +338,11 @@ export class Relay {
       const session = getSession(db, sid, now);
       if (options.board && !db.prepare("SELECT 1 FROM boards WHERE id=?").get(options.board)) throw new Fault("board", "Board does not exist");
       const agent = db.prepare("SELECT * FROM agents WHERE id=?").get(session.worker);
+      if (options.board) {
+        const board = db.prepare("SELECT * FROM boards WHERE id=?").get(options.board);
+        if (board.kind === "host" && (board.device !== readMeta(db, "device").id || board.device !== agent.device)) throw new Fault("denied", "Host board belongs to another device");
+        if (board.kind === "bounty" && readMeta(db, "role") !== "hub") throw new Fault("board", "Bounty board is not local");
+      }
       expireWorker(db, session.worker, now);
       const candidates = options.board
         ? db.prepare("SELECT * FROM messages WHERE board=? AND kind='work' AND state='pending' ORDER BY seq").all(options.board)
@@ -333,10 +350,6 @@ export class Relay {
       let chosen;
       for (const row of candidates) {
         if (options.board) {
-          const board = db.prepare("SELECT * FROM boards WHERE id=?").get(options.board);
-          if (!board) throw new Fault("board", "Board does not exist");
-          if (board.kind === "host" && board.device !== agent.device) throw new Fault("denied", "Host board belongs to another device");
-          if (board.kind === "bounty" && readMeta(db, "role") !== "hub") throw new Fault("board", "Bounty board is not local");
           if (row.series) {
             const earlier = db.prepare("SELECT id,state FROM messages WHERE board=? AND series=? AND seq<? AND state IN ('pending','claimed') ORDER BY seq LIMIT 1").get(row.board, row.series, row.seq);
             if (earlier) continue;
@@ -511,7 +524,7 @@ export class Relay {
         firstSeq: db.prepare("SELECT MIN(seq) AS n FROM audit").get().n ?? null, pruned: readMeta(db, "auditPruned") ?? 0 };
     });
   }
-  report(sid, report) {
+  report(sid, report, authorization = null) {
     input(report && typeof report === "object" && !Array.isArray(report), "Invalid report");
     canonicalJson(report, LIMITS.reportBytes);
     input(Number.isSafeInteger(report.seq) && report.seq >= 1, "Invalid report");
@@ -543,6 +556,10 @@ export class Relay {
     return tx(this, "write", ({ db, now }) => {
       const session = getSession(db, sid, now);
       const device = db.prepare("SELECT * FROM devices WHERE id=(SELECT device FROM agents WHERE id=?)").get(session.worker);
+      if (authorization) {
+        const principal = authorization.principal;
+        if (!principal?.id || session.principal !== principal.id || principal.grant?.reportDevice !== device.id) throw new Fault("denied", "Report is outside this principal scope");
+      }
       const exactBoard = `host:${device.id}`;
       if (board.id !== exactBoard) throw new Fault("denied", "Report board is outside the device namespace");
       const prior = db.prepare("SELECT * FROM reports WHERE device=?").get(device.id);
@@ -759,7 +776,8 @@ function authorizeCore(relay, authorization, op, args) {
   };
   if (op === "register") {
     const bound = grant.register?.[0];
-    if (!bound || bound.deviceId !== relay.device.id || bound.deviceName !== relay.device.name || !bound.runtimes.includes(args.runtime) || (bound.allocate && args.options?.slot === undefined) || (!bound.allocate && args.options?.slot === undefined) || args.options?.slot === "prime") throw new Fault("denied", "Registration is outside this principal scope");
+    const local = bound?.deviceId === relay.device.id && bound?.deviceName === relay.device.name;
+    if (!bound || !bound.runtimes.includes(args.runtime) || (bound.allocate && !local) || (!bound.allocate && args.options?.slot === undefined) || (!local && args.options?.slot === undefined) || args.options?.slot === "prime") throw new Fault("denied", "Registration is outside this principal scope");
   } else if (op === "enroll") {
     const device = args.device; if (!grant.enroll?.some((item) => item.deviceId === device.id && item.deviceName === device.name)) throw new Fault("denied", "Enrollment is outside this principal scope");
   } else if (op === "join") {
@@ -770,7 +788,10 @@ function authorizeCore(relay, authorization, op, args) {
     if (op === "post" && !grantHas(grant.boardPost, args.board)) throw new Fault("denied", "Board is outside this principal scope");
     if (op === "claim" && args.options?.board && !grantHas(grant.boardClaim, args.options.board)) throw new Fault("denied", "Board is outside this principal scope");
     if (op === "claim" && !args.options?.board && !grantHas(grant.workers, wid)) throw new Fault("denied", "Worker is outside this principal scope");
-    if (op === "report" && grant.reportDevice !== relay.device.id) throw new Fault("denied", "Report is outside this principal scope");
+    if (op === "report") {
+      const session = relay._store.db.prepare("SELECT s.principal,s.epoch,a.epoch AS current_epoch,a.device FROM sessions s JOIN agents a ON a.id=s.worker WHERE s.id=?").get(args.sid);
+      if (!session || session.principal !== principal.id || session.epoch !== session.current_epoch || grant.reportDevice !== session.device) throw new Fault("denied", "Report is outside this principal scope");
+    }
   } else if (op === "get") {
     // Row-dependent scope is checked in the same transaction below.
   } else if (["list", "stats", "audit", "snapshot"].includes(op)) {
@@ -803,7 +824,7 @@ function replayResult(relay, row, authorization) {
 
 function invoke(relay, op, args, authorization) {
   switch (op) {
-    case "register": return relay.register(args.runtime, args.options);
+    case "register": return relay.register(args.runtime, args.options, authorization);
     case "enroll": return relay.enroll(args.device, authorization);
     case "join": return relay.join(args.worker, args.options);
     case "resume": return relay.resume(args.sid);
@@ -819,7 +840,7 @@ function invoke(relay, op, args, authorization) {
     case "list": return relay.list(args.options, authorization);
     case "stats": return relay.stats();
     case "audit": return relay.audit(args.options);
-    case "report": return relay.report(args.sid, args.report);
+    case "report": return relay.report(args.sid, args.report, authorization);
     case "snapshot": return relay.snapshot(args.options, undefined, authorization.scopeKey);
     case "attempt": return inspectAttempt(relay, args, authorization);
     default: throw new Fault("protocol", "Unsupported operation");
