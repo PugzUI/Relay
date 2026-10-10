@@ -1,14 +1,73 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
+import { createServer as createNetServer } from "node:net";
+import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { connect } from "../src/client.mjs";
+import { Client, connect } from "../src/client.mjs";
 import { serve } from "../src/broker.mjs";
 import { Fault } from "../src/fault.mjs";
 import { readConfig, parseJsonStrict } from "../src/config.mjs";
 import { setup } from "../src/relay.mjs";
 import { credential, emptyGrant, privateFile, withTempDir } from "./network-helpers.mjs";
+
+test("Client public calls are authenticated and reject lossy envelopes before sending", async () => {
+  assert.throws(() => new Client(), /Use connect\(\)/);
+  await withTempDir(async (root) => {
+    const auth = credential();
+    const tokenFile = await privateFile(join(root, "token"), auth.token);
+    const requests = [];
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+      requests.push({ method: req.method, authorization: req.headers.authorization, body });
+      res.writeHead(200, { "content-type": "application/json" });
+      if (req.url === "/v1/health") {
+        res.end(JSON.stringify({ v: 1, authority: "fixture-authority", time: 1 }));
+      } else {
+        const result = body.op === "stats"
+          ? { authority: "fixture-authority", time: 2, messages: { pending: 0, claimed: 0, posted: 0, done: 0, failed: 0, rejected: 0, rows: 0, bytes: 0 }, sessions: { live: 0, ended: 0 }, leases: { live: 0, total: 0 }, receipts: 0, devices: 0, agents: 0, boards: 0, audit: { rows: 0, pruned: 0 } }
+          : { id: "message-1", repeat: false, init: 3 };
+        res.end(JSON.stringify({ v: 1, rid: body.rid, ok: true, result, time: 3, replayed: false, remainingMs: null }));
+      }
+    });
+    await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", (error) => error ? reject(error) : resolve()));
+    const client = await connect({ url: `http://127.0.0.1:${server.address().port}`, tokenFile, mode: "local" });
+    try {
+      assert.equal(client.authority, "fixture-authority");
+      assert.equal((await client.stats()).authority, "fixture-authority");
+      const sent = await client.send("east:worker:001", "west:worker:001", { work: { items: [1, null, "ok"] } });
+      assert.equal(sent.id, "message-1");
+      assert.deepEqual(requests.map(({ method, authorization }) => [method, authorization]), [
+        ["GET", `Bearer ${auth.token}`],
+        ["POST", `Bearer ${auth.token}`],
+        ["POST", `Bearer ${auth.token}`],
+      ]);
+      assert.deepEqual(requests[2].body.args.envelope, { work: { items: [1, null, "ok"] } });
+
+      const sparse = []; sparse.length = 1;
+      const invalid = [
+        { work: sparse },
+        { work: { value: Number.NaN } },
+        { work: { value: new Date(0) } },
+        { work: { value: undefined } },
+        new Proxy({ work: {} }, { ownKeys() { throw new Error("unsupported proxy"); } }),
+      ];
+      const sentCount = requests.length;
+      for (const envelope of invalid) {
+        await assert.rejects(client.send("east:worker:001", "west:worker:001", envelope), (error) => error instanceof Fault && error.code === "data");
+      }
+      assert.equal(requests.length, sentCount);
+      await client.close();
+      assert.equal(client.authority, "fixture-authority");
+      await assert.rejects(client.stats(), (error) => error instanceof Fault && error.code === "unavailable");
+    } finally {
+      await client.close();
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
 
 test("strict config parser rejects duplicate fields and trailing JSON", () => {
   assert.throws(() => parseJsonStrict('{"mode":"local","mode":"lan"}'), (error) => error.code === "input");
@@ -46,7 +105,7 @@ test("broker serves the page module at its exact UI path and protects its API", 
     setup({ root, device: "page" });
     const auth = credential({ grant: emptyGrant() });
     await privateFile(join(root, "credentials.json"), JSON.stringify({ version: 1, credentials: [auth.entry] }));
-    const probe = createServer();
+    const probe = createNetServer();
     await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
     const port = probe.address().port;
     await new Promise((resolve, reject) => probe.close((error) => error ? reject(error) : resolve()));

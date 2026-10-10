@@ -97,8 +97,12 @@ test("native launch keeps stdin open for bootstrap and exact lease execution", a
       const launch = await pool.ensureCapacity({ primeSid: session.id, demand: 1, readySpare: 0 });
       assert.equal(launch.state, "running");
       assert.match(launch.worker, /^east:worker:\d{3,32}$/);
+      const controller = new AbortController();
+      const task = pool.start({ worker: launch.worker, localSid: launch.sid, signal: controller.signal, execute: async () => "failed" });
       const until = Date.now() + 5000;
       while (local.stats().messages.done !== 1 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
+      controller.abort();
+      await task;
       assert.equal(local.stats().messages.done, 1);
     } finally { await pool.close(); local.close(); }
   });
