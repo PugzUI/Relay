@@ -321,7 +321,7 @@ export async function consumeSseBody(body, signal, onFrame) {
   if (failure) throw failure;
 }
 
-export function parseBoardPage(input, board, kind, authority) {
+export function parseBoardPage(input, board, kind, authority = null) {
   const page = exact(input, PAGE_KEYS, "page");
   text(board, "board");
   if (kind !== "msg" && kind !== "work") throw new TypeError("kind: invalid kind");
@@ -329,11 +329,11 @@ export function parseBoardPage(input, board, kind, authority) {
   if (!Array.isArray(page.items) || page.items.length > 200 || page.visible !== page.items.length || page.total < page.visible) throw new TypeError("page: invalid counts");
   if (typeof page.complete !== "boolean" || (page.complete && page.next !== null) || (!page.complete && typeof page.next !== "string")) throw new TypeError("page: invalid continuation");
   const cursor = messageCursor(page.cursor);
-  if (cursor.authority !== authority) throw new TypeError("page: authority mismatch");
+  if (authority !== null && cursor.authority !== authority) throw new TypeError("page: authority mismatch");
   nullableText(page.next, "page.next");
   if (page.next !== null) {
     const next = messageCursor(page.next);
-    if (next.authority !== authority || next.scope !== cursor.scope || next.filter !== cursor.filter || next.boundary !== cursor.boundary || next.last <= cursor.last) throw new TypeError("page: continuation mismatch");
+    if (next.authority !== cursor.authority || next.scope !== cursor.scope || next.filter !== cursor.filter || next.boundary !== cursor.boundary || next.last <= cursor.last) throw new TypeError("page: continuation mismatch");
   }
   nullableInteger(page.firstSeq, "page.firstSeq");
   for (const row of page.items) {
@@ -345,7 +345,13 @@ export function parseBoardPage(input, board, kind, authority) {
     nullableText(row.series, "message.series"); integer(row.init, "message.init"); nullableInteger(row.acked, "message.acked");
     if ("data" in row) parseEnvelope(row.data, kind);
   }
-  return page;
+  return { page, authority: cursor.authority };
+}
+
+export function bindBoardAuthority(state, authority) {
+  text(authority, "page authority");
+  if (state.boardAuthority !== null && state.boardAuthority !== authority) throw new TypeError("page: authority mismatch");
+  state.boardAuthority = authority;
 }
 
 export function createUiState() {
@@ -353,6 +359,7 @@ export function createUiState() {
     token: null,
     snapshot: null,
     selectedBoard: null,
+    boardAuthority: null,
     selectedNode: null,
     connection: "disconnected",
     inbox: { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error: null, generation: 0 },
@@ -369,6 +376,7 @@ export function clearPrivateState(state) {
   state.token = null;
   state.snapshot = null;
   state.selectedBoard = null;
+  state.boardAuthority = null;
   state.selectedNode = null;
   state.pulses = [];
   state.inbox = emptyPane(state.inbox.generation + 1);
@@ -386,6 +394,7 @@ export function denyPane(state, name, generation) {
 export function selectBoard(state, board) {
   if (board !== null && !state.snapshot?.boards.some((entry) => entry.id === board)) throw new TypeError("board is not in the current snapshot");
   state.selectedBoard = board;
+  state.boardAuthority = null;
   state.inbox = emptyPane(state.inbox.generation + 1);
   state.bounties = emptyPane(state.bounties.generation + 1);
   return state;
