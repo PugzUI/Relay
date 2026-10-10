@@ -62,7 +62,7 @@ async function terminalDemo() {
   let relay;
   let failure;
   try {
-    const device = setup({ root, device: "demo-local" });
+    const device = setup({ root, device: "demo-local", role: "hub" });
     relay = open({ root });
     const result = await populate(relay, device, controller.signal);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -142,6 +142,7 @@ async function populate(relay, device, signal, sessions = []) {
   for (const worker of workers) sessions.push((await relay.join(worker.id)).id);
 
   const inboxAdmission = await relay.post(sessions[0], hostBoard, { msg: "Synthetic demo workers are ready." });
+  await relay.post(sessions[0], "bounty", { msg: "Synthetic demo workers are ready." });
   const workAdmissions = [
     await relay.post(sessions[0], "bounty", { work: { task: "inspect", input: "relay demo topology" } }, { needs: ["inspect"] }),
     await relay.post(sessions[0], hostBoard, { work: { task: "verify", input: "relay demo board" } }, { needs: ["verify"] }),
@@ -217,7 +218,7 @@ async function writeDemoFiles(parent, device, token, port) {
         recipients: [],
         boardPost: ["bounty", `host:${device.id}`],
         boardClaim: ["bounty", `host:${device.id}`],
-        inboxRead: [`host:${device.id}`],
+        inboxRead: ["bounty", `host:${device.id}`],
         workRead: ["bounty", `host:${device.id}`],
         inspect: { messages: true, receipts: true, audit: true, topology: true },
         reportDevice: device.id,
