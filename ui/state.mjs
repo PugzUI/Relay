@@ -361,11 +361,33 @@ export function createUiState() {
   };
 }
 
+function emptyPane(generation, error = null) {
+  return { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error, generation };
+}
+
+export function clearPrivateState(state) {
+  state.token = null;
+  state.snapshot = null;
+  state.selectedBoard = null;
+  state.selectedNode = null;
+  state.pulses = [];
+  state.inbox = emptyPane(state.inbox.generation + 1);
+  state.bounties = emptyPane(state.bounties.generation + 1);
+}
+
+export function denyPane(state, name, generation) {
+  if (name !== "inbox" && name !== "bounties") throw new TypeError("unknown pane");
+  const pane = state[name];
+  if (pane.generation !== generation) return false;
+  state[name] = emptyPane(pane.generation + 1, "Denied");
+  return true;
+}
+
 export function selectBoard(state, board) {
   if (board !== null && !state.snapshot?.boards.some((entry) => entry.id === board)) throw new TypeError("board is not in the current snapshot");
   state.selectedBoard = board;
-  state.inbox = { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error: null, generation: state.inbox.generation + 1 };
-  state.bounties = { page: null, pages: [], pageIndex: -1, pageBase: 0, loading: false, error: null, generation: state.bounties.generation + 1 };
+  state.inbox = emptyPane(state.inbox.generation + 1);
+  state.bounties = emptyPane(state.bounties.generation + 1);
   return state;
 }
 
