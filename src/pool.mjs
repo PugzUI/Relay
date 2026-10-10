@@ -299,7 +299,8 @@ async function startPool(pool, input) {
   await pool.ready;
   if (pool.startupError) throw pool.startupError;
   if (pool.loops.has(input.worker)) fail("active", "Worker loop is already active");
-  const signal = AbortSignal.any([input.signal, pool.abort.signal]);
+  const child = [...pool.children.values()].find((entry) => entry.record.worker === input.worker);
+  const signal = AbortSignal.any([input.signal, pool.abort.signal, ...(child ? [child.abort.signal] : [])]);
   const workerInput = { ...input, signal };
   const loop = (async () => {
     let delay = pool.pollMs;
@@ -318,7 +319,7 @@ async function startPool(pool, input) {
         delay = pool.pollMs;
         let result;
         try {
-          result = await executeLaunched(pool, input.worker, item) ?? await input.execute(item, signal);
+          result = await executeLaunched(pool, input.worker, item, signal) ?? await input.execute(item, signal);
           if (!["done", "failed", "rejected", "release"].includes(result)) fail("input", "Worker returned an invalid outcome");
         }
         catch (error) {
@@ -420,7 +421,7 @@ async function launchOne(pool, config, primeSid, demand, readySpare) {
   catch (error) {
     return updateLaunch(pool.local, { id: row.id, from: "starting", to: "failed", reason: "spawn" });
   }
-  let lineBuffer = Buffer.alloc(0); let settled = false; let readySeen = false; let resultWaiter = null; let readyResolve; let readyReject; let currentHandle = null; let spawnError = null; let childLoopAbort = null;
+  let lineBuffer = Buffer.alloc(0); let settled = false; let readySeen = false; let resultWaiter = null; let readyResolve; let readyReject; let currentHandle = null; let spawnError = null;
   const ready = new Promise((resolveReady, rejectReady) => { readyResolve = resolveReady; readyReject = rejectReady; });
   void ready.catch(() => {});
   const protocolFailure = (error) => {
@@ -474,12 +475,14 @@ async function launchOne(pool, config, primeSid, demand, readySpare) {
     if (lineBuffer.length) protocolFailure(new Fault("protocol", "Child ended with an incomplete frame"));
     if (!settled) readyReject(new Fault("unavailable", "Child exited before readiness"));
     resultWaiter?.reject(new Fault("unavailable", "Child exited during a task")); resultWaiter = null;
-    childLoopAbort?.abort();
+    pool.children.get(row.id)?.abort.abort();
     void handlePromise.then(async (handle) => {
       const current = pool.launchRows.get(row.id);
       if (handle && current && ["starting", "running", "unknown"].includes(current.state)) {
         const exited = updateLaunch(pool.local, { id: row.id, from: current.state, to: "exited", handle, exitCode: code, signal });
         pool.launchRows.set(row.id, exited);
+        const owned = pool.children.get(row.id);
+        if (owned) owned.record = exited;
       }
     }).catch(() => {});
   });
@@ -493,26 +496,33 @@ async function launchOne(pool, config, primeSid, demand, readySpare) {
     if (!handle || !Array.isArray(frame.caps) || frame.caps.length > 16 || new Set(frame.caps).size !== frame.caps.length || [...frame.caps].sort().join("\0") !== [...config.capabilities].sort().join("\0") || !Number.isSafeInteger(frame.epoch) || frame.epoch < 1 || typeof frame.sid !== "string" || typeof frame.worker !== "string") fail("protocol", "Child readiness frame is invalid");
     const running = updateLaunch(pool.local, { id: row.id, from: "starting", to: "running", handle, ready: { worker: frame.worker, sid: frame.sid, epoch: frame.epoch, nonce: frame.nonce, caps: frame.caps } });
     settled = true;
-    childLoopAbort = new AbortController();
+    const childAbort = new AbortController();
     pool.children.set(row.id, {
-      child, handle, nonce, record: running, config,
-      abort: childLoopAbort,
+      child, handle, nonce, record: running, config, abort: childAbort,
       sendFrame(frameValue) { return writeChildFrame(child, JSON.stringify(frameValue), LIMITS.payloadBytes + 1024); },
-      cancelResult() { resultWaiter = null; },
-      waitResult(lease) {
+      cancelResult(error) {
+        if (!resultWaiter) return;
+        const rejectResult = resultWaiter.reject; resultWaiter = null; rejectResult(error);
+      },
+      waitResult(lease, signal) {
         return new Promise((resolveResult, rejectResult) => {
           if (resultWaiter) { rejectResult(new Fault("active", "Child already has an active task")); return; }
-          resultWaiter = { lease, resolve: resolveResult, reject: rejectResult };
+          let settledResult = false;
+          const finish = (settle, value) => {
+            if (settledResult) return;
+            settledResult = true;
+            signal.removeEventListener("abort", onAbort);
+            if (resultWaiter?.lease === lease) resultWaiter = null;
+            settle(value);
+          };
+          const onAbort = () => finish(rejectResult, new Fault("unavailable", "Worker task was cancelled"));
+          resultWaiter = { lease, resolve: (value) => finish(resolveResult, value), reject: (error) => finish(rejectResult, error) };
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
         });
       },
     });
     pool.launchRows.set(row.id, running);
-    void startPool(pool, { worker: frame.worker, localSid: frame.sid, signal: childLoopAbort.signal, execute: () => fail("unavailable", "Launched worker is unavailable") }).catch(() => {
-      const owned = pool.children.get(row.id);
-      if (!owned || owned.record.state !== "running") return;
-      const unknown = updateLaunch(pool.local, { id: row.id, from: "running", to: "unknown", handle });
-      owned.record = unknown; pool.launchRows.set(row.id, unknown);
-    });
     return running;
   } catch (error) {
     try {
@@ -548,15 +558,15 @@ async function launchOne(pool, config, primeSid, demand, readySpare) {
   } finally { clearTimeout(timer); }
 }
 
-async function executeLaunched(pool, worker, item) {
+async function executeLaunched(pool, worker, item, signal) {
   const child = [...pool.children.values()].find((entry) => entry.record.worker === worker);
   if (!child) return null;
   if (child.record.state !== "running" || !await handleMatches(child.handle) || child.handle.nonce !== child.nonce) fail("unavailable", "Owned worker process cannot be verified");
   const frame = { v: 1, event: "execute", id: child.record.id, nonce: child.nonce, authority: item.authority, board: item.board, lease: item.lease };
   if (Buffer.byteLength(JSON.stringify(frame)) > LIMITS.payloadBytes + 1024) fail("data", "Launch task frame is too large");
-  const result = child.waitResult(item.lease.id);
+  const result = child.waitResult(item.lease.id, signal);
   try { await child.sendFrame(frame); }
-  catch (error) { child.cancelResult(); throw error; }
+  catch (error) { child.cancelResult(error); await result.catch(() => {}); throw error; }
   return result;
 }
 

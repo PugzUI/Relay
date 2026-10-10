@@ -6,9 +6,11 @@ import { constants } from "node:fs";
 import { isIP } from "node:net";
 import { Fault } from "./fault.mjs";
 import { parseJsonStrict } from "./config.mjs";
+import { LIMITS, canonicalJson as encodeJson, validateEnvelope } from "./validate.mjs";
 
 const clients = new WeakMap();
 const ambiguousResponses = new WeakSet();
+const clientToken = Symbol("Client construction");
 const ops = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "stats", "audit", "report", "snapshot", "attempt"]);
 const mutating = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "report"]);
 const fail = (code, message, context) => { throw new Fault(code, message, context); };
@@ -173,7 +175,7 @@ function request(state, method, path, body, deadline, auth = true) {
 }
 
 export class Client {
-  constructor() { throw new TypeError("Use connect()"); }
+  constructor(token) { if (token !== clientToken) throw new TypeError("Use connect()"); }
   get authority() { return clients.get(this)?.authority ?? ""; }
   register(runtime, options) { return this.#call("register", { runtime, ...(options === undefined ? {} : { options }) }); }
   enroll(device) { return this.#call("enroll", { device }); }
@@ -193,10 +195,11 @@ export class Client {
   audit(options) { return this.#call("audit", { ...(options === undefined ? {} : { options }) }); }
   report(sid, report) { return this.#call("report", { sid, report }); }
   snapshot(options) { return this.#call("snapshot", { ...(options === undefined ? {} : { options }) }); }
-  async #call(op, args) { const state = clients.get(this); if (!state) fail("unavailable", "Client is closed"); return invokeClient(this, { rid: rid(), op, args, deadline: performance.now() + 10000 }); }
+  async #call(op, args) { const state = clients.get(this); if (!state) fail("unavailable", "Client is closed"); const outcome = await invokeClient(this, { rid: rid(), op, args, deadline: performance.now() + 10000 }); return outcome.result; }
   async close() {
     const state = clients.get(this); if (!state || state.closed) return;
-    state.closed = true; for (const req of state.requests) req.destroy(new Error("client closed")); state.requests.clear();
+    state.closed = true; state.token = null; state.ca = null;
+    for (const req of state.requests) req.destroy(new Error("client closed")); state.requests.clear();
   }
 }
 
@@ -217,7 +220,7 @@ async function openClient(options, { checkHealth, signal } = {}) {
     ca = await readPrivate(options.caFile, "CA file", 1_048_576);
     if (!ca.length) fail("input", "CA file is invalid");
   }
-  const client = Object.create(Client.prototype);
+  const client = new Client(clientToken);
   const state = { url, token, ca, requests: new Set(), closed: false, authority: null, signal };
   clients.set(client, state);
   try {
@@ -236,11 +239,15 @@ export async function invokeClient(client, input) {
   const state = clients.get(client);
   if (!state || state.closed) fail("unavailable", "Client is closed");
   if (!object(input) || Object.keys(input).sort().join(",") !== "args,deadline,op,rid" || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.rid) || !ops.has(input.op) || !object(input.args) || !Number.isFinite(input.deadline)) fail("input", "RPC call is invalid");
-  let payload;
-  try { payload = JSON.stringify({ v: 1, rid: input.rid, op: input.op, args: input.args }); }
-  catch { fail("input", "RPC arguments are not serializable"); }
-  if (typeof payload !== "string") fail("input", "RPC arguments are not serializable");
-  if (Buffer.byteLength(payload) > 131072) fail("protocol", "Request is too large", { id: input.rid });
+  if (input.op === "send" || input.op === "post") {
+    try { validateEnvelope(input.args.envelope, { board: input.op === "post" }); }
+    catch (error) { if (error instanceof Fault) throw error; fail("data", "Envelope is not representable JSON"); }
+  }
+  let encoded;
+  try { encoded = encodeJson({ v: 1, rid: input.rid, op: input.op, args: input.args }, LIMITS.requestBytes + 1); }
+  catch (error) { if (error instanceof Fault) throw error; fail("data", "RPC arguments are not representable JSON"); }
+  if (encoded.bytes > LIMITS.requestBytes) fail("protocol", "Request is too large", { id: input.rid });
+  const payload = encoded.json;
   const started = performance.now(); let lastError;
   const attempts = mutating.has(input.op) ? 3 : 1;
   for (let i = 0; i < attempts; i++) {
