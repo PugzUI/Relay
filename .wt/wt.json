@@ -1,0 +1,8 @@
+{
+  "from": "main",
+  "copyGlobs": [],
+  "copyDirs": [],
+  "excludeDirs": [],
+  "symlinks": [],
+  "links": {}
+}

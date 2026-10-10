@@ -1,0 +1,11 @@
+node_modules
+coverage
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+.local
+.relay
+!/.wt/
+/.wt/*
+!/.wt/wt.json
