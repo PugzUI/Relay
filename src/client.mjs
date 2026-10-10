@@ -207,11 +207,11 @@ export async function connect(options) {
   return openClient(options, { checkHealth: true });
 }
 
-export async function createFixedClient(options, signal) {
-  return openClient(options, { checkHealth: false, signal });
+export async function createFixedClient(options, signal, { checkHealth = false, deadline } = {}) {
+  return openClient(options, { checkHealth, signal, deadline });
 }
 
-async function openClient(options, { checkHealth, signal } = {}) {
+async function openClient(options, { checkHealth, signal, deadline: operationDeadline } = {}) {
   if (!object(options) || Object.keys(options).some((k) => !["url", "tokenFile", "caFile", "mode"].includes(k)) || typeof options.url !== "string" || typeof options.tokenFile !== "string" || options.caFile !== undefined && typeof options.caFile !== "string") fail("input", "Client options are invalid");
   const url = endpoint(options.url, options.mode);
   const token = await readToken(options.tokenFile);
@@ -225,14 +225,20 @@ async function openClient(options, { checkHealth, signal } = {}) {
   clients.set(client, state);
   try {
     if (checkHealth) {
-      const deadline = performance.now() + 10000;
+      const deadline = operationDeadline ?? performance.now() + 10000;
       const health = await request(state, "GET", "/v1/health", undefined, deadline);
       if (health.status < 200 || health.status >= 300) throw parseFault(health.value);
       if (health.value?.v !== 1 || !id(health.value.authority) || !integer(health.value.time) || Object.keys(health.value).sort().join(",") !== "authority,time,v") fail("protocol", "Broker health response is invalid");
       state.authority = health.value.authority;
     }
     return client;
-  } catch (error) { await client.close(); throw error; }
+  } catch (error) {
+    await client.close();
+    if (!(error instanceof Fault) && ["ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT"].includes(error?.code)) {
+      throw new Fault("unavailable", "Broker connection is unavailable", { cause: error });
+    }
+    throw error;
+  }
 }
 
 export async function invokeClient(client, input) {
