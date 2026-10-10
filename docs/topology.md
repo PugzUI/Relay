@@ -18,11 +18,12 @@ snapshot. The stream is bounded and does not block a lease transaction. A
 hidden tab pauses motion and displays current state after resynchronization,
 not old events as current activity.
 
-The UI is not present in the committed foundation. No screenshot or visual
-review is available yet. The capture command is designed to use the integrated
-UI at a loopback origin and a fresh temporary Chromium profile; wide/narrow
-captures, runtime/version evidence, and visual review remain pending the real
-backend/UI merge.
+The capture command uses the integrated UI at a loopback origin, submits a
+private demo token through the UI form, and waits for connected topology plus
+nonempty Inbox and Bounties panes before saving wide/narrow screenshots and
+runtime metadata. It requires the actual disposable demo server; it does not
+mock UI responses. Screenshots and visual review remain pending a successful
+run against the merged backend.
 
 The topology grant is metadata-only. Inbox and work bodies require separate
 permissions. Text is rendered as text, never HTML or terminal control. Board

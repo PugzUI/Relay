@@ -93,11 +93,17 @@ npm run capture
 ```
 
 `check` validates syntax, declarations, package contents, and frozen module
-presence; it does not run tests. `test` is separate. `capture` requires the
-integrated UI, an actual disposable demo server on loopback, an installed
-Chromium executable, and `RELAY_CAPTURE_URL` set to its loopback origin. It
-uses a fresh temporary browser profile. No screenshot is included because the
-UI/backend integration and capture review are pending.
+presence; it does not run tests. `test` is separate. `capture` requires an
+actual disposable demo server with connected topology, Inbox, and Bounties
+data on loopback (default port `4200`), a private token file, and Chromium
+browser. It uses a fresh temporary browser profile and the UI's bearer-token
+form. The URL defaults to `http://127.0.0.1:4200`; set `RELAY_CAPTURE_URL` to
+select another loopback origin. Set `RELAY_CAPTURE_TOKEN_FILE` to a private
+file containing the demo token and `RELAY_BROWSER` to select a browser
+executable. Capture fails on authentication, loading, empty board panes, or
+unavailable data. A successful run writes wide and narrow screenshots plus
+actual browser, runtime, viewport, and timestamp metadata under `docs/media/`.
+No screenshot is included until a real disposable server produces one.
 
 The supported runtime contract is Node.js `>=24.0.0` on a local filesystem.
 No runtime dependencies are declared. See [acceptance cases](docs/acceptance.md)
