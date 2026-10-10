@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, sep } from "node:path";
-import { open, setup } from "../src/index.mjs";
+import { open } from "../src/index.mjs";
 
 const parent = await mkdtemp(resolve(tmpdir(), "relay-recovery-"));
 const root = resolve(parent, "interrupted run");
@@ -9,11 +9,10 @@ let relay;
 let sid;
 let failure;
 try {
-  const device = setup({ root, device: "demo-recovery" });
-  relay = open({ root, sessionMs: 5_000, claimMs: 1_000 });
+  relay = open({ root, device: "demo-recovery", sessionMs: 5_000, claimMs: 1_000 });
   const worker = relay.register("worker", { caps: ["inspect"] });
   sid = relay.join(worker.id).id;
-  const board = `host:${device.id}`;
+  const board = `host:${relay.device.id}`;
   relay.post(sid, board, { work: { task: "recover", workspace: "demo" } });
   const interrupted = relay.claim(sid, { board });
   if (!interrupted) throw new Error("expected the demo job to be claimed");
@@ -24,7 +23,7 @@ try {
   const recovered = relay.claim(sid, { board });
   if (!recovered) throw new Error("expired work did not become claimable");
   const receipt = relay.ack(sid, recovered.id, "done");
-  process.stdout.write(`${JSON.stringify({ interruptedAttempt: interrupted.id, recoveredAttempt: recovered.id, attempt: recovered.attempt, receipt }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ interruptedAttempt: interrupted.id, recoveredAttempt: recovered.id, attempt: recovered.attempt, receipt: { mid: receipt.mid, lease: receipt.lease, epoch: receipt.epoch, outcome: receipt.outcome, time: receipt.time } }, null, 2)}\n`);
 } catch (error) {
   failure = error;
   throw error;
