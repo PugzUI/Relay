@@ -248,7 +248,7 @@ export async function invokeClient(client, input) {
   catch (error) { if (error instanceof Fault) throw error; fail("data", "RPC arguments are not representable JSON"); }
   if (encoded.bytes > LIMITS.requestBytes) fail("protocol", "Request is too large", { id: input.rid });
   const payload = encoded.json;
-  const started = performance.now(); let lastError;
+  const started = performance.now(); let lastError; let mayHaveCommitted = false;
   const attempts = mutating.has(input.op) ? 3 : 1;
   for (let i = 0; i < attempts; i++) {
     let response;
@@ -271,14 +271,21 @@ export async function invokeClient(client, input) {
     } catch (error) {
       lastError = error;
       if (error instanceof Fault) {
-        if (state.closed) throw error;
         const ambiguous = ambiguousResponses.has(error) || response && response.status >= 200 && response.status < 300 && error.code === "protocol";
+        const transient = ["timeout", "unavailable"].includes(error.code);
+        if (mutating.has(input.op) && (ambiguous || transient)) mayHaveCommitted = true;
+        if (state.closed) {
+          if (mutating.has(input.op) && mayHaveCommitted) fail("uncertain", "Mutation outcome is uncertain", { id: input.rid });
+          throw error;
+        }
         if (ambiguous && mutating.has(input.op) && i + 1 < attempts && performance.now() < input.deadline) continue;
         if (ambiguous && mutating.has(input.op)) fail("uncertain", "Mutation response is uncertain", { id: input.rid });
-        if (["timeout", "unavailable"].includes(error.code) && mutating.has(input.op) && i + 1 < attempts && performance.now() < input.deadline) continue;
-        if (error.code === "timeout" || error.code === "unavailable") fail(mutating.has(input.op) ? "uncertain" : error.code, mutating.has(input.op) ? "Mutation outcome is uncertain" : error.message, { id: input.rid });
+        if (transient && mutating.has(input.op) && i + 1 < attempts && performance.now() < input.deadline) continue;
+        if (transient) fail(mutating.has(input.op) ? "uncertain" : error.code, mutating.has(input.op) ? "Mutation outcome is uncertain" : error.message, { id: input.rid });
+        if (mutating.has(input.op) && mayHaveCommitted && !["expired", "session"].includes(error.code)) fail("uncertain", "Mutation outcome is uncertain", { id: input.rid });
         throw error;
       }
+      if (mutating.has(input.op)) mayHaveCommitted = true;
       if (i + 1 >= attempts || performance.now() >= input.deadline) break;
     }
   }
