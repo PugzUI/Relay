@@ -1,7 +1,7 @@
 {
-  "capturedAt": "2026-10-10T06:58:13.527Z",
+  "capturedAt": "2026-10-10T08:22:22.875Z",
   "browser": "Chromium 153.0.8010.52 Arch Linux",
-  "runtime": "v26.8.1",
+  "runtime": "v26.11.1",
   "views": {
     "topology.png": {
       "origin": "http://127.0.0.1:4200",
@@ -28,6 +28,33 @@
       "pixels": {
         "width": 1440,
         "height": 1000
+      }
+    },
+    "readme.png": {
+      "origin": "http://127.0.0.1:4200",
+      "selectedBoard": "bounty",
+      "viewport": {
+        "width": 1000,
+        "height": 900
+      },
+      "document": {
+        "width": 1000,
+        "height": 900,
+        "horizontalOverflow": false
+      },
+      "topologyItems": 5,
+      "panes": {
+        "inboxRows": 1,
+        "bountiesRows": 1
+      },
+      "connection": "connected",
+      "paneStates": {
+        "inbox": "Ready",
+        "bounties": "Ready"
+      },
+      "pixels": {
+        "width": 1000,
+        "height": 900
       }
     },
     "topology-narrow.png": {

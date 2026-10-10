@@ -27,10 +27,11 @@ identity; an uncertain lock is left for review, not removed by PID alone.
 
 ## Qualification status
 
-No LAN or Tailscale reachability, certificate, access-policy, two-host, or
-private-proxy qualification has been recorded for this checkout. A loopback
-HTTP/HTTPS harness can test protocol behavior, scopes, bounded bodies, and
-replay. It cannot prove physical-host reachability or tailnet policy.
+HTTP/HTTPS loopback protocol exchanges and the disposable network example
+have been exercised with real persisted receipts. This establishes local
+transport, authentication, scope, and recovery evidence; it does not establish
+physical-host reachability or tailnet policy. No physical LAN/Tailscale,
+private-route policy, or denied-third-device qualification is recorded.
 
 [`examples/network.mjs`](../examples/network.mjs) is a disposable same-machine
 HTTP/HTTPS exercise with independent hub and host stores, synthetic credentials
@@ -40,8 +41,16 @@ fixed loopback listener). It records an addressed message, hub bounty work,
 and host-local work. Port overrides are explicit environment values; a bind
 conflict stops the example. It requires the OpenSSL command to create its
 one-run loopback certificate. It does not configure LAN, Tailscale, or host
-policy, and has not yet been replayed against the missing network
-implementation.
+policy. The recorded native run produced addressed, bounty, and host-local
+acknowledgements across independent stores. If the browser demo occupies
+`4200`, select explicit alternative ports:
+
+```sh
+RELAY_DEMO_HUB_PORT=4210 RELAY_DEMO_HOST_PORT=4211 RELAY_DEMO_HTTPS_PORT=4212 node examples/network.mjs
+```
+
+See [verification boundaries](verification.md) for the distinction between
+same-machine protocol evidence and physical deployment qualification.
 
 Tailscale setup and private Serve policy are operator-owned deployment work.
 Relay commands and examples do not install Tailscale, alter firewall rules,
@@ -52,5 +61,8 @@ allowed/denied device observations for that run. There is no qualified version
 or route evidence to pin here yet.
 
 Do not treat a hostname, reported device, or tailnet membership as Relay
-authorization. Do not put tokens, session IDs, message bodies, credential
-paths, or private-key material in logs, URLs, or captures.
+authorization. Keep tokens, session IDs, private message bodies and
+private-key material out of diagnostic logs, URLs and shared captures. The
+committed board captures use only synthetic demo data. The operator-initiated
+disposable demo prints its own token-file reference, never the bearer value;
+do not copy that private reference into shared logs.

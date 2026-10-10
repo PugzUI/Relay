@@ -26,8 +26,11 @@ the live origin, selected board, pane row counts, measured viewport and document
 width, visible keyboard focus, reduced-motion styles, and uncaught runtime
 exception count. Metadata contains board and row counts but no pane bodies,
 tokens, session IDs, or local paths. It requires the actual disposable demo
-server; it does not mock UI responses. Screenshots and visual review remain
-pending a successful run against the merged backend.
+server; it does not mock UI responses. The committed images and
+[capture metadata](media/capture.json) are from a real authenticated run.
+Wide and narrow layouts were visually reviewed. Native browser checks also
+exercised metadata-only and work-only permissions, credential revocation,
+an empty store, actual broker stop/restart, and HTML-like text rendered inertly.
 
 The topology grant is metadata-only. Inbox and work bodies require separate
 permissions. Text is rendered as text, never HTML or terminal control. Board

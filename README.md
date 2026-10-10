@@ -3,14 +3,16 @@
 ## Quick start
 
 ```sh
+git clone https://github.com/PugzUI/Relay.git
+cd Relay
 npm ci
 npm run demo
 ```
 
 The demo uses a temporary local store, two synthetic workers, board posts,
 claims, persisted acknowledgements, and the resulting snapshot/audit records.
-It does not launch an agent runtime or start a network listener. The source
-checkout uses the existing local core implementation.
+It does not launch an agent runtime or start a network listener. No model
+provider or account is needed.
 
 To run the authenticated browser demo, start its disposable loopback listener
 in one terminal. This explicit mode defaults to port `4200` and five minutes;
@@ -18,13 +20,13 @@ it prints a private token-file path and the capture command, never the token or
 a session ID.
 
 ```sh
-RELAY_DEMO_TOKEN_FILE=/tmp/relay-demo.token npm run demo -- --serve
+RELAY_DEMO_TOKEN_FILE="${TMPDIR:-/tmp}/relay-demo.token" npm run demo -- --serve
 ```
 
 In a second terminal, run this while the demo is still running:
 
 ```sh
-RELAY_CAPTURE_TOKEN_FILE=/tmp/relay-demo.token npm run capture
+RELAY_CAPTURE_TOKEN_FILE="${TMPDIR:-/tmp}/relay-demo.token" npm run capture
 ```
 
 Choose another fixed port or bounded duration when needed:
@@ -41,6 +43,18 @@ and removes them when its duration ends or it receives `SIGINT`/`SIGTERM`. Run
 profile. Browser capture exercises the local configured path. Physical LAN and
 Tailscale qualification remains pending.
 
+## View
+
+![Topology and selected board panes](docs/media/readme.png)
+
+[Full-size topology](docs/media/topology.png) ·
+[Narrow topology](docs/media/topology-narrow.png) ·
+[Narrow board panes](docs/media/board-narrow.png) ·
+[Recorded capture metadata](docs/media/capture.json)
+
+The images are captures of the disposable authenticated demo, not mockups.
+The bearer field is cleared after connection; credentials stay in memory.
+
 ## CLI
 
 Local inspection and mutation use a selected store root. Read commands open it
@@ -53,7 +67,7 @@ node src/cli.mjs join workstation:worker:001 --root './relay data'
 printf '%s\n' '{"msg":"ready"}' | node src/cli.mjs send workstation:worker:001 --sid SESSION --root './relay data'
 ```
 
-Replace `SESSION` with the `sid` returned by `join`. A send or board post reads
+Replace `SESSION` with the session `id` returned by `join`. A send or board post reads
 one JSON envelope from stdin: `{ "msg": "text" }` or
 `{ "work": { "task": "inspect" } }`. Text is never classified as work.
 `--json` writes compact JSON; normal output escapes terminal control bytes.
@@ -82,8 +96,9 @@ and [topology](docs/topology.md).
 
 The [recovery example](examples/recovery.mjs) closes and reopens a disposable
 store around lease expiry. The [network example](examples/network.mjs) uses
-two loopback authorities with generated temporary credentials; its real
-receipt run remains pending network integration.
+two independent loopback authorities with temporary credentials and a trusted
+one-run HTTPS certificate. It produces addressed, bounty, and host-local
+acknowledgement receipts through the actual broker/client protocol.
 
 ## Delivery and authority
 
@@ -134,7 +149,9 @@ or geometry mismatch, horizontal overflow, browser runtime exceptions, or
 unavailable data. A successful run writes wide and narrow topology screenshots,
 a narrow board view, and measured browser, runtime, viewport, pixel, board, and
 timestamp metadata under `docs/media/`.
-No screenshot is included until a real disposable server produces one.
+The committed captures were exercised against the real local demo. Native
+Node.js 24 and 26 checks and regression suites are qualified on Linux; see
+[verification evidence and remaining boundaries](docs/verification.md).
 
 The supported runtime contract is Node.js `>=24.0.0` on a local filesystem.
 No runtime dependencies are declared. See [acceptance cases](docs/acceptance.md)

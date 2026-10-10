@@ -1,0 +1,13 @@
+{
+  "checks": {
+    "metadataOnly": "connected topology, both denied panes empty",
+    "workOnly": "permitted work retained while Inbox is denied",
+    "revocation": "private pages and selection cleared after actual credential revocation",
+    "empty": "actual empty store renders both Empty panes",
+    "offline": "actual broker stop leaves connected state",
+    "reconnect": "real broker restart restores clean Empty panes",
+    "inertText": "real posted HTML-like text remains text with no executable element"
+  },
+  "browserOwned": true,
+  "profile": "fresh headless Chromium profile"
+}

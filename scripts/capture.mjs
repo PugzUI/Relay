@@ -138,6 +138,7 @@ async function capture() {
 
     const views = [
       { name: "topology.png", width: 1440, height: 1000, mobile: false, scroll: false },
+      { name: "readme.png", width: 1000, height: 900, mobile: false, scroll: false },
       { name: "topology-narrow.png", width: 390, height: 844, mobile: true, scroll: false },
       { name: "board-narrow.png", width: 390, height: 1200, mobile: true, scroll: true },
     ];
@@ -222,10 +223,11 @@ async function capture() {
     };
     await writeFile(join(staging, "capture.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: "wx" });
     await mkdir(output, { recursive: true });
-    for (const name of ["topology.png", "topology-narrow.png", "board-narrow.png", "capture.json"]) {
+    const filenames = [...views.map((view) => view.name), "capture.json"];
+    for (const name of filenames) {
       await rename(join(staging, name), join(output, name));
     }
-    process.stdout.write(`${JSON.stringify({ files: ["docs/media/topology.png", "docs/media/topology-narrow.png", "docs/media/board-narrow.png", "docs/media/capture.json"], browser: version, runtime: process.version })}\n`);
+    process.stdout.write(`${JSON.stringify({ files: filenames.map((name) => `docs/media/${name}`), browser: version, runtime: process.version })}\n`);
   } catch (error) {
     failure = error;
     throw error;
