@@ -1598,9 +1598,13 @@ and counts, native request ID where supported, state/timestamps, retry boundary,
 and validated reason code. Target rows share one gate across the root's local
 and hub bindings. These records never copy message/work bodies.
 
-The target digest is SHA-256 over canonical runtime-instance/profile/native-
-session/lifecycle-generation identity. A fixed per-OS-user exclusive-create
-(`O_EXCL`) token keyed by that digest is only a cross-root exclusion primitive;
+The target digest is SHA-256 over canonical stable `(profile, native session)`
+identity, independent of Relay authority and adapter client. Runtime-instance
+and lifecycle-generation values remain in the protected binding row, and each
+rotation increments its binding generation. They are deliberately excluded
+from the stable target gate so a restart cannot bypass an unresolved attempt.
+A fixed per-OS-user exclusive-create (`O_EXCL`) token keyed by that digest is
+only a cross-root exclusion primitive;
 SQLite remains the only authoritative state engine. It contains no body,
 credential, or raw session identity. It has no expiry-based takeover. A second
 root targeting the same native session refuses until the owning root safely

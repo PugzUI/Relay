@@ -231,3 +231,77 @@ test("same-store owner fences native attempts and retains target exclusion until
   assert.equal(deliveryStatus(recovered).targets.locked, 0);
   assert.equal(recovered._store.db.prepare("SELECT native_request_id FROM delivery_attempts WHERE id=?").get(attempt.id).native_request_id, "native-1");
 });
+
+test("native target gate remains stable across authority and lifecycle rotation", (t) => {
+  const previousHome = process.env.HOME;
+  const home = mkdtempSync(join(tmpdir(), "relay-delivery-rotation-home-"));
+  process.env.HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const root = temporaryRoot(t);
+  const initialized = open({ root, device: "rotation" });
+  initialized.close();
+  const relay = openForBroker({ root, role: "host", ownerToken: "R".repeat(32) });
+  t.after(() => relay.close());
+  const worker = relay.register("worker");
+  const session = relay.join(worker.id);
+  const ownerGeneration = claimDeliveryOwner(relay).generation;
+  const target = { runtimeInstance: "opencode-process-1", profile: "default", nativeSession: "native-session-1", lifecycleGeneration: "life-1" };
+  const binding = bindDeliverySession(relay, {
+    authority: relay.authority, worker: worker.id, sid: session.id, epoch: session.epoch,
+    target, capabilities: { context: true, idle: true, launch: false }, ownerGeneration,
+  });
+  const hubBinding = bindDeliverySession(relay, {
+    authority: "hub-authority", worker: "remote:worker:prime", sid: "remote-session", epoch: 7,
+    target, capabilities: { context: true, idle: true, launch: false }, ownerGeneration,
+  });
+  assert.equal(binding.targetDigest, hubBinding.targetDigest);
+
+  const attempt = reserveDeliveryAttempt(relay, {
+    id: "rotation-attempt-1", ownerGeneration,
+    bindings: [
+      { binding: binding.id, generation: binding.generation, summary: relay.pending(session.id) },
+      { binding: hubBinding.id, generation: hubBinding.generation, summary: { ...relay.pending(session.id), authority: "hub-authority", worker: "remote:worker:prime", epoch: 7 } },
+    ],
+  });
+  const scopes = [
+    { binding: binding.id, generation: binding.generation },
+    { binding: hubBinding.id, generation: hubBinding.generation },
+  ];
+  transitionDeliveryAttempt(relay, { id: attempt.id, ownerGeneration, bindings: scopes, from: "reserved", to: "submitting" });
+
+  const rotated = bindDeliverySession(relay, {
+    authority: relay.authority, worker: worker.id, sid: session.id, epoch: session.epoch,
+    target: { ...target, runtimeInstance: "opencode-process-2", lifecycleGeneration: "life-2" },
+    capabilities: { context: true, idle: true, launch: false }, ownerGeneration,
+  });
+  assert.equal(rotated.id, binding.id);
+  assert.equal(rotated.targetDigest, binding.targetDigest);
+  assert.equal(rotated.generation, binding.generation + 1);
+  assert.equal(relay._store.db.prepare("SELECT lifecycle_generation FROM delivery_bindings WHERE id=?").get(rotated.id).lifecycle_generation, "life-2");
+  const rotatedHub = bindDeliverySession(relay, {
+    authority: "hub-authority", worker: "remote:worker:prime", sid: "remote-session", epoch: 7,
+    target: { ...target, runtimeInstance: "opencode-process-2", lifecycleGeneration: "life-2" },
+    capabilities: { context: true, idle: true, launch: false }, ownerGeneration,
+  });
+  assert.equal(rotatedHub.id, hubBinding.id);
+  assert.equal(rotatedHub.targetDigest, rotated.targetDigest);
+  assert.equal(rotatedHub.generation, hubBinding.generation + 1);
+  assert.throws(() => reserveDeliveryAttempt(relay, {
+    id: "rotation-attempt-2", ownerGeneration,
+    bindings: [{ binding: rotated.id, generation: rotated.generation, summary: relay.pending(session.id) }],
+  }), { code: "active" });
+
+  const otherScope = bindDeliverySession(relay, {
+    authority: "other-authority", worker: "other:worker:prime", sid: "other-session", epoch: 1,
+    target: { ...target, runtimeInstance: "opencode-process-2", lifecycleGeneration: "life-2" },
+    capabilities: { context: true, idle: false, launch: false }, ownerGeneration,
+  });
+  assert.equal(otherScope.targetDigest, rotated.targetDigest);
+  assert.equal(deliveryStatus(relay).targets.total, 1);
+  assert.equal(deliveryStatus(relay).targets.locked, 1);
+});

@@ -13,17 +13,20 @@
     "zed",
     "opencode"
   ],
-  "implementedAdapters": [],
+  "implementedAdapters": [
+    "opencode"
+  ],
   "qualifiedAdapters": [],
   "nativeQualification": "pending",
   "relayAdapterBoundary": {
-    "invocation": "The Relay broker calls startDeliveryAdapter({client, bind, signal}) in the broker process.",
+    "invocation": "The Relay broker calls startDeliveryAdapter({client, bind, signal, root, onEvidence}) in the broker process; the OpenCode plugin connects over an authenticated private Unix socket.",
     "nativeRuntimeContextProvided": false,
     "bindingRequired": [
       "authority",
       "worker",
       "sid",
       "epoch",
+      "client",
       "target.runtimeInstance",
       "target.profile",
       "target.nativeSession",
@@ -31,8 +34,8 @@
       "capabilities",
       "consumer"
     ],
-    "finding": "The adapter entrypoint receives no native SDK/plugin context or startup event from which to establish an exact current native target. OpenCode and Hermes expose relevant APIs inside their own runtime/plugin process; no supported exact-existing-session external API is established by the inspected inventory.",
-    "smallestRequiredAuthorization": "Authorize a Relay-owned native startup bridge at the owning runtime integration, or provide a supported fixed-destination API to the exact existing session. The bridge must pass a current native identity and the already-authorized Relay authority/worker/session/epoch into the existing bind callback. Do not add a parallel configuration system, start a new conversation, or change host configuration without that authorization."
+    "finding": "The broker intentionally receives no native SDK/plugin context. The Relay-owned OpenCode plugin runs inside its v2 PluginContext and hands exact session/profile/lifecycle identity plus explicit Relay authority/worker/session/epoch bindings to the existing bind callback through the owner-only local bridge. Other clients remain unimplemented.",
+    "smallestRequiredAuthorization": "OpenCode host deployment remains owner-controlled: enable the exported plugin on the supported v2 runtime and grant no broader permission than its exact-session API requires. Supply an explicit existing Relay recipient mapping in plugin options. Do not modify host configuration or activate a native session as part of this implementation stage."
   },
   "runtimeVersions": {
     "codex": "codex-cli 0.162.1 (observed)",
@@ -131,11 +134,13 @@
     {
       "id": "opencode",
       "surface": "OpenCode v2 PluginContext/client session API",
-      "relayContext": "unqualified",
-      "relayIdle": "unqualified",
+      "relayContext": "implemented-unqualified",
+      "relayIdle": "implemented-unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "OpenCode v2.0.26 exposes in-process exact-session prompt submission with explicit queue delivery and a caller-supplied admission ID, plus session events. The admission is not context/turn observation. Relay's broker adapter call has no PluginContext/client or native startup identity, and the managed bridge does not submit Relay notices.",
-      "smallestNextStep": "Authorize the owning native plugin bridge to load the Relay entrypoint and supply the current PluginContext, exact native lifecycle identity, and already-authorized Relay session/epoch."
+      "pluginEntryPoint": "@pugzui/relay/opencode-plugin",
+      "runtimeVersion": "v2.0.26 (pinned implementation surface)",
+      "apiFinding": "The packaged plugin implementation checks the configured exact session through PluginContext, uses session.prompt with queue delivery and a stable caller-supplied ID, and separately observes context, model-request, and safe-idle events. Its Relay bindings share one consumer and stable profile/session target gate across local and hub authorities. Bridge/plugin fixtures verify mechanics only. An isolated v2.0.26 serve under a temporary HOME had no disposable session available; no native plugin bind, prompt, or provider call was performed.",
+      "smallestNextStep": "For WP5b, provide an already-created disposable OpenCode session in an isolated profile, or explicitly authorize a supported no-provider session-creation path. Then enable the exported plugin only in that profile, supply its explicit existing Relay mapping, and perform the separately authorized context/turn/idle/refusal/restart qualification. Do not use a real user session or infer qualification from admission or fixtures."
     }
   ]
 }

@@ -760,10 +760,10 @@ function validateDeliveryTarget(value) {
   return value;
 }
 
-/** SHA-256 of the canonical native target tuple; never includes Relay scope. */
+/** SHA-256 of the stable profile/session gate; lifecycle identity is fenced by binding generation. */
 export function deliveryTargetDigest(value) {
   validateDeliveryTarget(value);
-  return sha(canonicalJson(value, 4096).json);
+  return sha(canonicalJson({ profile: value.profile, nativeSession: value.nativeSession }, 4096).json);
 }
 
 function deliveryLockDirectory(create) {
@@ -928,9 +928,15 @@ export function bindDeliverySession(relay, value) {
     const prior = db.prepare("SELECT * FROM delivery_bindings WHERE authority=? AND worker=? AND sid=? AND epoch=? AND target=?").get(value.authority, value.worker, value.sid, value.epoch, targetDigest);
     if (!prior && Number(db.prepare("SELECT COUNT(*) AS n FROM delivery_bindings WHERE state='active'").get().n) >= LIMITS.deliveryBindings) throw new Fault("full", "Delivery binding capacity is full");
     if (!prior && deliveryRowCount(db) >= LIMITS.deliveryRows) throw new Fault("full", "Delivery coordination history is full");
-    const generation = prior ? Number(prior.generation) + (prior.state === "active" && Number(prior.owner_generation) === ownerGeneration && prior.capabilities === capabilities ? 0 : 1) : 1;
+    const sameNativeGeneration = prior
+      && prior.runtime_instance === value.target.runtimeInstance
+      && prior.profile === value.target.profile
+      && prior.native_session === value.target.nativeSession
+      && prior.lifecycle_generation === value.target.lifecycleGeneration;
+    const generation = prior ? Number(prior.generation) + (prior.state === "active" && Number(prior.owner_generation) === ownerGeneration && prior.capabilities === capabilities && sameNativeGeneration ? 0 : 1) : 1;
     const bindingId = prior?.id ?? id();
-    if (prior) db.prepare("UPDATE delivery_bindings SET capabilities=?,generation=?,owner_generation=?,state='active',changed=? WHERE id=?").run(capabilities, generation, ownerGeneration, now, bindingId);
+    if (prior) db.prepare("UPDATE delivery_bindings SET runtime_instance=?,profile=?,native_session=?,lifecycle_generation=?,capabilities=?,generation=?,owner_generation=?,state='active',changed=? WHERE id=?")
+      .run(value.target.runtimeInstance, value.target.profile, value.target.nativeSession, value.target.lifecycleGeneration, capabilities, generation, ownerGeneration, now, bindingId);
     else db.prepare("INSERT INTO delivery_bindings(id,authority,worker,sid,epoch,target,runtime_instance,profile,native_session,lifecycle_generation,capabilities,generation,owner_generation,state,init,changed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?)")
       .run(bindingId, value.authority, value.worker, value.sid, value.epoch, targetDigest, value.target.runtimeInstance, value.target.profile, value.target.nativeSession, value.target.lifecycleGeneration, capabilities, generation, ownerGeneration, now, now);
     return deliveryBindingRow(db.prepare("SELECT * FROM delivery_bindings WHERE id=?").get(bindingId));

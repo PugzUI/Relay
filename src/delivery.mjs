@@ -55,7 +55,7 @@ async function loadAdapter(client) {
   try { await access(path); }
   catch (error) { if (error.code === "ENOENT") return null; throw new Fault("unavailable", "Delivery adapter cannot be inspected"); }
   const adapter = await import(path.href);
-  if (adapter.client !== client || typeof adapter.startDeliveryAdapter !== "function" || !object(adapter.capabilities) || Object.keys(adapter.capabilities).sort().join(",") !== "context,idle,launch" || Object.values(adapter.capabilities).some((value) => typeof value !== "boolean") || !["wired", "unsupported"].includes(adapter.evidence)) {
+  if (adapter.client !== client || typeof adapter.startDeliveryAdapter !== "function" || !object(adapter.capabilities) || Object.keys(adapter.capabilities).sort().join(",") !== "context,idle,launch" || Object.values(adapter.capabilities).some((value) => typeof value !== "boolean") || !["pending", "wired", "unsupported"].includes(adapter.evidence)) {
     throw new Fault("schema", "First-party delivery adapter contract is invalid");
   }
   return adapter;
@@ -572,6 +572,7 @@ export function createDeliverySupervisor(options) {
     const record = { ...binding, client: input.client, consumer, active: true };
     state.bindings.set(record.id, record);
     const targetRecord = existingTarget ?? { digest: targetDigest, target, consumer, bindingIds: new Set() };
+    targetRecord.target = target;
     targetRecord.bindingIds.add(record.id);
     state.targets.set(targetDigest, targetRecord);
     const handle = Object.freeze({
@@ -606,14 +607,22 @@ export function createDeliverySupervisor(options) {
     state.starting = true;
     for (const client of state.clients) {
       const adapter = await loadAdapter(client);
-      if (!adapter || adapter.evidence !== "wired") {
-        state.adapterStates.set(client, Object.freeze({ evidence: adapter?.evidence ?? "unsupported", capabilities: adapter?.capabilities ?? { context: false, idle: false, launch: false } }));
+      const capabilities = Object.freeze({ ...(adapter?.capabilities ?? { context: false, idle: false, launch: false }) });
+      const publishEvidence = (evidence) => {
+        if (!["pending", "wired", "unsupported"].includes(evidence)) fail("protocol", "Native adapter reported invalid evidence");
+        const activeCapabilities = evidence === "unsupported"
+          ? Object.freeze({ context: false, idle: false, launch: false })
+          : capabilities;
+        state.adapterStates.set(client, Object.freeze({ evidence, capabilities: activeCapabilities }));
+      };
+      if (!adapter || adapter.evidence === "unsupported") {
+        publishEvidence(adapter?.evidence ?? "unsupported");
         continue;
       }
-      const result = await adapter.startDeliveryAdapter(Object.freeze({ client, bind, signal: state.abort.signal }));
+      publishEvidence(adapter.evidence);
+      const result = await adapter.startDeliveryAdapter(Object.freeze({ client, bind, signal: state.abort.signal, root, onEvidence: publishEvidence }));
       if (!exact(result, ["close"]) || typeof result.close !== "function") throw new Fault("protocol", "Native adapter did not return an owned close handle");
       state.adapterHandles.push(result);
-      state.adapterStates.set(client, Object.freeze({ evidence: "wired", capabilities: Object.freeze({ ...adapter.capabilities }) }));
     }
     state.starting = false;
     await runPass();
