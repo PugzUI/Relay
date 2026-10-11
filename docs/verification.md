@@ -85,6 +85,10 @@ reviewed; all identities and posted text are disposable synthetic data.
 
 ## Open qualification boundaries
 
+- **Native delivery:** WP1 froze a documentation/contract baseline only. All
+  D01–D26 cases remain pending; no Relay native adapter, host configuration
+  change, real agent-session delivery, or idle-turn observation was performed.
+  The version snapshot in [delivery.md](delivery.md) is not a support matrix.
 - **A21:** separately authorized physical two-host LAN/Tailscale exchanges.
 - **A29:** actual private proxy/access-policy inspection and denied-third-device
   observations.

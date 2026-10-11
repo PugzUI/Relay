@@ -113,6 +113,10 @@ side effect occurred but before acknowledgement. Make external effects
 idempotent when duplication matters. A keyed send deduplicates admission during
 key retention; it does not provide exactly-once execution.
 
+Relay’s durable queue does not itself invoke an agent session or wake an idle
+runtime. Optional native delivery is not implemented or qualified; see the
+[delivery contract and client inventory](docs/delivery.md).
+
 ## Network and setup
 
 Local setup starts no listener. `serve` is an explicit operation; its default

@@ -68,3 +68,44 @@ An isolated loopback HTTPS/TLS harness with synthetic identities can provide
 protocol evidence for network cases. It does not pass A21 or A29: those require
 separately authorized physical hosts and their actual LAN/private-network
 policy. Missing access leaves those qualification cases open.
+
+## Native delivery (Relay/v2)
+
+These are release requirements, not recorded results. Every case is pending;
+native API documentation, a stub adapter, or a hook declaration does not pass a
+case.
+
+| ID | Scenario | Required observation | Status |
+|---|---|---|---|
+| D01 | Disabled/default | Ordinary account-free local Relay use starts no notifier, listener, native input, or process. | Pending |
+| D02 | Real startup/context callback | A native lifecycle callback binds the exact synthetic session; its notice is visible to the model, not only stdout or a registration record. | Pending |
+| D03 | Unattended idle activation | Addressed synthetic mail starts a turn in the same already-idle session without user input; current state is observed within reconciliation plus native submission bounds, excluding model-generation time. | Pending |
+| D04 | Busy delivery | A controlled native tool remains uninterrupted; pending mail is visible at the documented next safe boundary, including work arriving while busy. | Pending |
+| D05 | Context-only/unsupported | The adapter reports the missing capability, leaves work pending, and does not claim idle wake or substitute a new session. | Pending |
+| D06 | Recipient isolation | Another worker, native session, authority, or profile receives no hint, body, or count from the target; runtime-name equality is insufficient. | Pending |
+| D07 | Current-session fencing | Expired, replaced, or ended sessions and delayed native replies cannot notify or complete against a new binding/epoch. | Pending |
+| D08 | Non-consuming summary | Repeated reads/notices leave queue, session lifetime, leases, outcomes, and RPC state unchanged; bodies are absent. | Pending |
+| D09 | Lease boundary | A receiver cannot execute from a notice or old receipt alone; current claim, lease attempt, and settlement permissions remain required. | Pending |
+| D10 | Inbox/work distinction | Board `{msg}` remains posted history; addressed `msg` uses normal claim rules; board work demand uses existing Pool eligibility/capacity only. | Pending |
+| D11 | Burst/duplicate hints | Duplicate callbacks and concurrent local/hub hints for one native target coalesce through one gate; native acceptance alone cannot admit another activation. New/deferred state remains discoverable without a wake storm, duplicate lease, or false acknowledgement. | Pending |
+| D12 | Release/expiry rediscovery | The same message becomes eligible again after release/expiry; admission-ID/sequence dedupe cannot suppress it permanently. Reads do not perform expiry mutation. | Pending |
+| D13 | Startup catch-up | Work admitted before supervisor startup or during downtime is found by current-state reconciliation without retained feed events. | Pending |
+| D14 | Feed reset/missed events | Broker restart, overflow, scope reset, stream saturation, or an omitted event recovers through fresh scoped reads without queue copying. | Pending |
+| D15 | Crash before submission | A persisted unsent attempt is safely reconciled/retried; work remains pending and no false delivered state appears. | Pending |
+| D16 | Crash after native acceptance | Recovery resolves or visibly retains uncertainty; it does not blindly start another turn or pretend exactly-once activation. | Pending |
+| D17 | Concurrent supervisors | Competing processes for one root or two roots targeting one session cannot submit independently. A paused old owner is fenced; unresolved native calls retain the target slot through takeover. | Pending |
+| D18 | Native hold/refusal | Refusal/approval is honored and observable; terminal input, alternate APIs, or process launch cannot bypass it. | Pending |
+| D19 | Absent/launch disabled | Work remains durable and absence is reported; no implicit launch occurs. | Pending |
+| D20 | Authorized bounded launch | Enabled local launch uses the existing recipe, budget, readiness proof, and ledger; ambiguous ownership stays blocked and remote payloads cannot select an executable. | Pending |
+| D21 | Credential/scope changes | Revocation and unsafe registry replacement deny future reads/submissions; there are no credential redirects or cross-principal bindings. | Pending |
+| D22 | Capacity/deadline/storage failure | Saturated bindings/calls/logs, SQLite contention, failed migration, corruption/disk error, or deadline exhaustion is reported safely without deleting pending work or unresolved attempts. | Pending |
+| D23 | Shutdown/cancellation | Owned timers/feeds/handles stop; accepted-but-unconfirmed input remains uncertain; existing sessions and unowned processes are untouched. | Pending |
+| D24 | Retention/privacy/output | Cleanup preserves unresolved coordination and pending work; bounded notices/logs/captures contain no payload, token, session handle, private path, or terminal-control injection. | Pending |
+| D25 | Native support matrix | Every enabled client has exact version/surface evidence for required capabilities; synthetic adapter success is not promoted to native qualification. | Pending |
+| D26 | Clean-checkout documentation | Actual release commands and a recorded synthetic example reproduce documented behavior; no planned command is presented as implemented and no unsupported platform/network claim is added. | Pending |
+
+For D03, D04, and D25, retain both native session/turn observations and Relay
+admission/claim/ack observations privately during qualification; publish only
+redacted evidence. Sender acceptance and delivery-consumer logs alone do not
+prove receiver behavior. A provider outage or unavailable native API remains a
+limitation, not a successful observation.

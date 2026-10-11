@@ -51,6 +51,7 @@ ack(sid: string, lease: string, outcome: AckOutcome): Receipt
 release(sid: string, lease: string): ReleaseReceipt
 get(id: string, options?: GetOptions): Message | null
 list(options?: ListOptions): Page<Message>
+pending(sid: string): PendingSummary
 stats(): Stats
 audit(options?: AuditOptions): Page<AuditEvent>
 report(sid: string, report: ReportInput): ReportReceipt
@@ -1529,3 +1530,148 @@ policy, certificates, services, or external agent configuration.
 - `npm run check` contains no test-runner or demo invocation. CI separately
   runs `npm test` on Linux Node 24 and 26; the demo/capture commands are not CI
   substitutes for automated tests or physical-host qualification.
+
+## 12. Native agent delivery (additive Relay/v2)
+
+This section freezes the additive contract. [Native delivery](delivery.md) owns
+the complete client inventory and evidence boundary. Delivery is disabled by
+default and is not implemented or qualified by this documentation. The base
+store, CLI, and public runtime exports remain usable with it disabled.
+
+### Recipient summary
+
+Add the payload-free `pending(sid)` read to `Relay` and `Client`, synchronously
+and asynchronously respectively. Add the type declarations below; do not add a
+new runtime top-level export.
+
+```ts
+interface PendingCounts {
+  msg: number;
+  work: number;
+}
+
+interface PendingSummary {
+  v: 1;
+  authority: string;
+  worker: WorkerAddress;
+  epoch: number;
+  revision: string;
+  pending: PendingCounts;
+  recoverable: PendingCounts;
+}
+```
+
+`revision` is 64 lowercase hexadecimal characters: SHA-256 over a canonical,
+body-free projection of this worker's eligible message/attempt state in the same
+read snapshot. It includes message identity, kind, state, claim-attempt number,
+current lease identity/deadline, and whether that lease is recoverable at the
+snapshot's single `now`. It changes on new admission, release/requeue, claim
+attempt change, and newly recoverable expiry; it is stable for unchanged state
+and contains no message body. `pending` counts stored addressed pending rows;
+`recoverable` counts claimed rows whose current live lease has expired and can
+become claimable through the existing mutation path. The read never performs
+that mutation.
+
+The result is exactly the seven fields above. It contains no session ID, lease,
+message ID/body, native handle, path, token, or other recipient's data. Board
+`{msg}` history is excluded; board `{work}` remains existing Pool/prime demand.
+This is a discovery hint, not a claim or acknowledgement.
+
+Add `pending` to the existing `/v1/call` operation set with exact arguments
+`{sid}`. It uses current authenticated worker/session ownership and the exact
+`workers` grant; it does not require `inspect.messages` or topology access.
+Recheck current credentials before response and filter before counting.
+The operation is read-only: it does not initialize a missing root/session,
+renew, claim, purge, expire/requeue, write audit, or insert an RPC journal row.
+No message/lease/receipt/session state changes. No second wire route or protocol
+is introduced.
+
+### Coordination and fencing
+
+Schema v3 adds only same-store coordination metadata: `delivery_owners`,
+`delivery_bindings`, `delivery_attempts`, `delivery_attempt_scopes`, and
+`delivery_targets`. Bindings retain the exact authority, worker, Relay session
+and epoch, native runtime instance/profile/session, native lifecycle generation,
+and binding generation in the owner-private local store. Attempts retain an
+opaque attempt ID, target digest, owner/binding generations, included revisions
+and counts, native request ID where supported, state/timestamps, retry boundary,
+and validated reason code. Target rows share one gate across the root's local
+and hub bindings. These records never copy message/work bodies.
+
+The target digest is SHA-256 over canonical runtime-instance/profile/native-
+session/lifecycle-generation identity. A fixed per-OS-user exclusive-create
+(`O_EXCL`) token keyed by that digest is only a cross-root exclusion primitive;
+SQLite remains the only authoritative state engine. It contains no body,
+credential, or raw session identity. It has no expiry-based takeover. A second
+root targeting the same native session refuses until the owning root safely
+releases or explicitly reconciles the attempt.
+
+Fence dispatch and completion by monotonic owner and binding generation. Persist
+the attempt and hold the target gate before native submission. `reserved` means
+the native call has not begun; persist `submitting` before crossing the native
+API boundary. Accepted admission, model-visible context, turn start, and the
+subsequent safe idle boundary are separate observations. `held`, `refused`, and
+`uncertain` are not success. A `submitting`/`admitted` attempt without an
+idempotent native retry or confirming observation retains its target gate
+through restart and supervisor lease expiry. Only supported native status or
+explicit operator reconciliation can release that uncertainty. A feed cursor,
+old receipt, notification, or owner timeout cannot.
+
+### Configuration, CLI, and schema lifecycle
+
+Config v1 stays byte-shape compatible and means delivery disabled. Strict config
+v2 adds exactly one top-level `delivery` object with exact keys
+`enabled`, `clients`, and `pollMs`; its disabled default is
+`{"enabled":false,"clients":[],"pollMs":1000}`. `clients` is a unique
+explicit subset of `codex`, `cursor`, `omp`, `antigravity`, `hermes`, `zed`,
+`zcode`, `opencode`, `kilo`, and `cline`. Enabled delivery requires a host role
+and at least one selected client. `pollMs` is 250–30,000 ms. No adapter URL,
+callback command, executable override, message-selected destination, or new
+launch permission is accepted. Unsupported selected clients remain visibly
+unsupported; they are not silently removed or downgraded.
+
+`relay pending --sid SID --root PATH` also supports the existing authenticated
+HTTPS client flags and returns exactly `PendingSummary`. `relay serve` remains
+the explicit foreground lifecycle owner; it starts one supervisor only when
+config v2 enables delivery, and `SIGINT`/`SIGTERM` stops it. `open()` and
+read-only commands never start a notifier. Local-only `relay delivery-status`
+is read-only and redacts all binding identifiers; local-only
+`relay delivery-reconcile ATTEMPT --outcome observed|not-accepted
+--reason-code operator-confirmed --confirm` records an explicit operator
+outcome and never emits native input.
+
+Fresh stores use schema v3. The new implementation continues to open schema v2
+for ordinary core operations and `pending()` while delivery is disabled;
+enabling delivery on v2 fails closed with the migration instruction. The sole
+upgrade is explicit `relay migrate --root PATH --to 3 --backup PATH`; rollback
+to v2 requires delivery disabled, no unresolved attempt/gate, and a new backup.
+Both directions refuse unknown/corrupt schemas and unsafe/overwriting backup
+paths. They preserve messages, leases, receipts, sessions, audit, RPC journal,
+and immutable `init`; rollback retains delivery-only history in the backup.
+Opening a store never migrates or resets it.
+
+### Delivery bounds
+
+Freeze these values in `src/validate.mjs`; lower existing Pool/broker/launch
+limits still apply:
+
+| Resource | Default / hard cap |
+|---|---|
+| Delivery | Disabled |
+| Active bindings | 64 / 512 |
+| Scheduled hints | One coalesced slot per binding; no per-event backlog |
+| Reconciliation | 1,000 ms; 250–30,000 ms |
+| Native calls | 4 total; 1 per native target across bindings |
+| Submission plus recovery deadline | 10,000 ms combined |
+| Retry backoff | 250–10,000 ms with jitter |
+| Notice | 2,048 UTF-8 bytes; no payload |
+| Automatic retry | At most 3 inside the deadline and only when safe/idempotent |
+| Coordination/history | 10,000 rows total; terminal history ≤7 days; unresolved rows retained and count toward capacity |
+| Public diagnostics | Existing default 50 / maximum 200 |
+
+Capacity refusal never deletes pending work or unresolved attempts. Cancellation
+that cannot be proved leaves the native attempt uncertain. Shutdown cancels
+owned timers/feeds, stops new attempts, closes owned handles, and never
+acknowledges work or terminates an unowned process. Absent workers can use only
+the existing explicitly authorized local `createPool`/`ensureCapacity` and
+CORE launch ledger; remote messages never grant launch permission.

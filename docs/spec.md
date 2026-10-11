@@ -1,5 +1,9 @@
 # Relay product specification
 
+Optional native agent delivery is specified in [docs/delivery.md](delivery.md).
+It is disabled by default, not currently implemented or qualified, and does not
+change the base Relay contract or establish idle-wake support.
+
 ## Product
 
 Relay is a standalone Node.js package and CLI for addressed worker messages,
@@ -167,11 +171,12 @@ listed in [the acceptance matrix](acceptance.md).
 
 No queue replication, peer mesh, broker federation, shared/network-mounted
 SQLite, public ingress, DAG or general scheduler, automatic task decomposition,
-model routing, runtime installer, arbitrary remote shell, plugin system,
-automatic desktop input, arbitrary process launch, general dashboard, diagram
-editor, or second state engine. Do not promise exactly-once external execution
-or cross-platform support without platform-specific qualification. No live
-existing-store migration is included.
+model routing, runtime installer, arbitrary remote shell, general plugin system,
+automatic desktop/UI automation, arbitrary process launch, general dashboard,
+diagram editor, or second state engine. Do not promise exactly-once external
+execution or cross-platform support without platform-specific qualification. No
+live authority/queue migration is included; the delivery schema extension is a
+separate explicit, backed-up migration that preserves existing store records.
 
 ## Ownership and licence
 
