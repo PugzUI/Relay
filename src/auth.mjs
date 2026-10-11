@@ -175,13 +175,13 @@ const opKeys = Object.freeze({
   register: ["runtime", "options"], enroll: ["device"], join: ["worker", "options"], resume: ["sid"], renew: ["sid"], leave: ["sid"],
   send: ["sid", "to", "envelope", "options"], post: ["sid", "board", "envelope", "options"], claim: ["sid", "options"], touch: ["sid", "lease"],
   ack: ["sid", "lease", "outcome"], release: ["sid", "lease"], get: ["id", "options"], list: ["options"], stats: [], audit: ["options"],
-  report: ["sid", "report"], snapshot: ["options"], attempt: ["sid", "lease"],
+  pending: ["sid"], report: ["sid", "report"], snapshot: ["options"], attempt: ["sid", "lease"],
 });
 const opts = (v, keys) => v === undefined || (obj(v) && exact(v, keys));
 function checkArguments(operation, args) {
   const keys = opKeys[operation];
   if (!keys || !obj(args) || Object.keys(args).some((k) => !keys.includes(k)) || keys.filter((k) => !["options"].includes(k)).some((k) => !Object.hasOwn(args, k))) input("Operation arguments are invalid");
-  if (["resume", "renew", "leave", "touch", "ack", "release", "attempt", "claim", "send", "post", "report"].includes(operation) && !text(args.sid, 128)) input();
+  if (["resume", "renew", "leave", "touch", "ack", "release", "attempt", "claim", "send", "post", "report", "pending"].includes(operation) && !text(args.sid, 128)) input();
   if (operation === "register" && (!tag(args.runtime) || args.runtime === "prime" || !opts(args.options, ["slot", "caps"]) || args.options?.slot !== undefined && (typeof args.options.slot !== "string" || !/^\d{3,32}$/.test(args.options.slot)) || args.options?.caps !== undefined && !uniq(args.options.caps, tag))) input();
   if (operation === "enroll" && (!required(args.device, ["id", "name", "init"]) || !opaque(args.device.id) || !/^[A-Za-z0-9._-]{1,63}$/.test(args.device.name) || !Number.isSafeInteger(args.device.init))) input();
   if (operation === "join" && (!address(args.worker) || !opts(args.options, ["replace"]) || args.options?.replace !== undefined && typeof args.options.replace !== "boolean")) input();

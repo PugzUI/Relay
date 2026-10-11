@@ -1,7 +1,7 @@
-import { randomUUID, createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { hostname } from "node:os";
-import { join } from "node:path";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync as openFileSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, hostname } from "node:os";
+import { join, resolve } from "node:path";
 import { closeDatabase, openDatabase, withTransaction } from "./sqlite.mjs";
 import { Fault } from "./fault.mjs";
 import { LIMITS, canonicalJson, fingerprint, validateAddress, validateDeviceName, validateEnvelope, validateKey, validateRuntime, validateSlot, validateTags } from "./validate.mjs";
@@ -437,6 +437,28 @@ export class Relay {
     if (withData) result.data = safeJson(row.data);
     return result;
   }
+  pending(sid) {
+    return tx(this, "read", ({ db, now }) => {
+      const session = getSession(db, sid, now);
+      const rows = db.prepare(`SELECT m.id,m.kind,m.state,m.attempt,l.id AS lease_id,l.until AS lease_until,l.state AS lease_state
+        FROM messages m LEFT JOIN leases l ON l.id=(SELECT l2.id FROM leases l2 WHERE l2.mid=m.id AND l2.attempt=m.attempt ORDER BY rowid DESC LIMIT 1)
+        WHERE m.recipient=? AND m.board IS NULL AND m.state IN ('pending','claimed') ORDER BY m.seq`).all(session.worker);
+      const pending = { msg: 0, work: 0 };
+      const recoverable = { msg: 0, work: 0 };
+      const projection = [];
+      for (const row of rows) {
+        if (row.state === "claimed" && (!row.lease_id || row.lease_state !== "live")) throw new Fault("schema", "Claimed message has no current live lease");
+        const leaseUntil = row.lease_until === null ? null : Number(row.lease_until);
+        if (leaseUntil !== null && (!Number.isSafeInteger(leaseUntil) || leaseUntil < 0)) throw new Fault("schema", "Message lease deadline is invalid");
+        const canRecover = row.state === "claimed" && row.lease_state === "live" && leaseUntil <= now;
+        if (row.state === "pending") pending[row.kind]++;
+        if (canRecover) recoverable[row.kind]++;
+        projection.push({ id: row.id, kind: row.kind, state: row.state, attempt: Number(row.attempt), lease: row.lease_id ?? null, until: leaseUntil, recoverable: canRecover });
+      }
+      const revision = sha(JSON.stringify({ v: 1, authority: this.authority, worker: session.worker, epoch: session.epoch, messages: projection }));
+      return { v: 1, authority: this.authority, worker: session.worker, epoch: session.epoch, revision, pending, recoverable };
+    });
+  }
   get(messageId, options, authorization = null) {
     options = assertOptions(options, ["data"], "get"); input(options.data === undefined || typeof options.data === "boolean", "Invalid data option");
     input(typeof messageId === "string" && messageId.length > 0 && messageId.length <= 128, "Invalid message ID");
@@ -688,6 +710,438 @@ function makeRelay(store) {
   return relay;
 }
 
+const deliveryTerminal = new Set(["safe_idle", "refused", "reconciled"]);
+const deliveryReasonCodes = new Set(["auth-revoked", "binding-stale", "capacity-full", "cancelled", "deadline-elapsed", "native-held", "native-refused", "native-timeout", "native-unavailable", "native-unsupported", "observed", "operator-confirmed", "owner-recovery", "retry-exhausted", "submission-uncertain", "target-owned"]);
+const deliveryTransitions = Object.freeze({
+  reserved: new Set(["submitting", "refused"]),
+  submitting: new Set(["admitted", "held", "refused", "uncertain"]),
+  admitted: new Set(["context_observed", "held", "uncertain"]),
+  context_observed: new Set(["turn_started", "safe_idle", "uncertain"]),
+  turn_started: new Set(["safe_idle", "uncertain"]),
+  held: new Set(["uncertain"]),
+  uncertain: new Set(["submitting", "admitted", "context_observed", "turn_started", "safe_idle", "held", "refused"]),
+});
+const deliveryOwnerDirName = ".relay-delivery-target-locks";
+const exactRecord = (value, keys) => value !== null && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null) && JSON.stringify(Reflect.ownKeys(value).sort()) === JSON.stringify([...keys].sort());
+
+function deliverySchemaStore(relay) {
+  const store = openRelays.get(relay);
+  if (!store) throw new Fault("input", "Invalid Relay handle");
+  if (store.closed) throw new Fault("storage", "Store handle is closed");
+  if (store.schemaVersion !== 3) throw new Fault("schema", "Delivery requires schema v3; run the explicit backed-up migration");
+  return store;
+}
+
+function deliveryOwnerRow(db) {
+  const row = db.prepare("SELECT owner_hash,generation FROM delivery_owners WHERE singleton=1").get();
+  const generation = row && Number(row.generation);
+  if (!row || row.owner_hash !== null && !/^[a-f0-9]{64}$/.test(row.owner_hash) || !Number.isSafeInteger(generation) || generation < 0) throw new Fault("schema", "Delivery owner row is invalid");
+  return { ownerHash: row.owner_hash, generation };
+}
+
+function assertDeliveryOwner(db, store, generation) {
+  if (!/^[a-f0-9]{64}$/.test(store.deliveryOwnerProof ?? "")) throw new Fault("owner", "Delivery owner proof is unavailable");
+  const owner = deliveryOwnerRow(db);
+  if (owner.ownerHash !== store.deliveryOwnerProof || generation !== undefined && owner.generation !== generation) throw new Fault("owner", "Delivery owner generation is stale");
+  return owner.generation;
+}
+
+function validateDeliveryText(value, label, maxBytes = 512) {
+  input(typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= maxBytes && !/\p{Cc}/u.test(value), `Invalid ${label}`);
+  return value;
+}
+
+function validateDeliveryTarget(value) {
+  input(exactRecord(value, ["runtimeInstance", "profile", "nativeSession", "lifecycleGeneration"]), "Invalid native target");
+  validateDeliveryText(value.runtimeInstance, "runtime instance");
+  validateDeliveryText(value.profile, "native profile");
+  validateDeliveryText(value.nativeSession, "native session");
+  validateDeliveryText(value.lifecycleGeneration, "native lifecycle generation", 256);
+  return value;
+}
+
+/** SHA-256 of the canonical native target tuple; never includes Relay scope. */
+export function deliveryTargetDigest(value) {
+  validateDeliveryTarget(value);
+  return sha(canonicalJson(value, 4096).json);
+}
+
+function deliveryLockDirectory(create) {
+  const home = resolve(homedir());
+  const path = join(home, deliveryOwnerDirName);
+  if (create) {
+    try { mkdirSync(path, { mode: 0o700 }); }
+    catch (error) { if (error.code !== "EEXIST") throw new Fault("storage", "Native target lock directory is unavailable", { cause: error }); }
+  }
+  let info;
+  try { info = lstatSync(path); }
+  catch (error) { if (!create && error.code === "ENOENT") return null; throw new Fault("storage", "Native target lock directory is unavailable", { cause: error }); }
+  if (info.isSymbolicLink() || !info.isDirectory() || realpathSync(path) !== path) throw new Fault("denied", "Native target lock directory is unsafe");
+  if (process.platform !== "win32") {
+    if (info.uid !== process.getuid?.()) throw new Fault("denied", "Native target lock directory has a different owner");
+    if ((info.mode & 0o077) !== 0) chmodSync(path, 0o700);
+  }
+  return path;
+}
+
+function readTargetLockNonce(digest) {
+  const directory = deliveryLockDirectory(false);
+  if (!directory) return null;
+  const path = join(directory, `${digest}.lock`);
+  let descriptor;
+  try {
+    descriptor = openFileSync(path, fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW));
+    const info = fstatSync(descriptor);
+    if (!info.isFile() || info.size > 1024 || process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) throw new Fault("active", "Native target exclusion token is unsafe");
+    const text = readFileSync(descriptor, "utf8");
+    const record = JSON.parse(text);
+    if (!exactRecord(record, ["nonce", "v"]) || record.v !== 1 || !/^[A-Za-z0-9_-]{32}$/.test(record.nonce) || JSON.stringify(record) !== text) throw new Fault("active", "Native target exclusion token is invalid");
+    return record.nonce;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    if (error instanceof Fault) throw error;
+    throw new Fault("storage", "Native target exclusion token cannot be read", { cause: error });
+  } finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
+
+function createTargetLock(digest, nonce) {
+  const path = join(deliveryLockDirectory(true), `${digest}.lock`);
+  let descriptor;
+  let created = false;
+  try {
+    descriptor = openFileSync(path, "wx", 0o600); created = true;
+    chmodSync(path, 0o600);
+    writeFileSync(descriptor, JSON.stringify({ v: 1, nonce }), "utf8");
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (descriptor !== undefined) { try { closeSync(descriptor); } catch {} descriptor = undefined; }
+    if (created) { try { unlinkSync(path); } catch {} }
+    if (error.code === "EEXIST") throw new Fault("active", "Native target is already owned by another Relay root");
+    if (error instanceof Fault) throw error;
+    throw new Fault("storage", "Native target exclusion token could not be persisted", { cause: error });
+  } finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
+
+function cleanupReleasedTargetLocks(relay, onlyDigest) {
+  const targets = tx(relay, "read", ({ db }) => onlyDigest
+    ? db.prepare("SELECT digest,lock_nonce FROM delivery_targets WHERE digest=? AND state='free' AND lock_nonce IS NOT NULL").all(onlyDigest)
+    : db.prepare("SELECT digest,lock_nonce FROM delivery_targets WHERE state='free' AND lock_nonce IS NOT NULL ORDER BY changed LIMIT 1000").all());
+  for (const row of targets) {
+    const nonce = readTargetLockNonce(row.digest);
+    if (nonce !== null && nonce !== row.lock_nonce) throw new Fault("active", "Native target exclusion token belongs to another owner");
+    if (nonce !== null) unlinkSync(join(deliveryLockDirectory(false), `${row.digest}.lock`));
+    tx(relay, "write", ({ db }) => db.prepare("UPDATE delivery_targets SET lock_nonce=NULL WHERE digest=? AND state='free' AND attempt IS NULL AND lock_nonce=?").run(row.digest, row.lock_nonce));
+  }
+}
+
+function deliveryRowCount(db) {
+  return Number(db.prepare("SELECT (SELECT COUNT(*) FROM delivery_owners)+(SELECT COUNT(*) FROM delivery_bindings)+(SELECT COUNT(*) FROM delivery_attempts)+(SELECT COUNT(*) FROM delivery_attempt_scopes)+(SELECT COUNT(*) FROM delivery_targets) AS n").get().n);
+}
+
+function pruneDeliveryHistory(db, now) {
+  const cutoff = now - LIMITS.terminalRetentionMs;
+  const attempts = db.prepare("SELECT id FROM delivery_attempts WHERE state IN ('safe_idle','refused','reconciled') AND changed<=? ORDER BY changed LIMIT 1000").all(cutoff);
+  for (const row of attempts) db.prepare("DELETE FROM delivery_attempt_scopes WHERE attempt=?").run(row.id);
+  for (const row of attempts) db.prepare("DELETE FROM delivery_attempts WHERE id=? AND state IN ('safe_idle','refused','reconciled')").run(row.id);
+  const bindings = db.prepare("SELECT b.id FROM delivery_bindings b WHERE b.state IN ('stale','ended') AND b.changed<=? AND NOT EXISTS(SELECT 1 FROM delivery_attempt_scopes s WHERE s.binding=b.id) ORDER BY b.changed LIMIT 1000").all(cutoff);
+  for (const row of bindings) db.prepare("DELETE FROM delivery_bindings WHERE id=? AND state IN ('stale','ended')").run(row.id);
+  const targets = db.prepare("SELECT t.digest FROM delivery_targets t WHERE t.state='free' AND t.lock_nonce IS NULL AND t.changed<=? AND NOT EXISTS(SELECT 1 FROM delivery_bindings b WHERE b.target=t.digest) AND NOT EXISTS(SELECT 1 FROM delivery_attempts a WHERE a.target=t.digest) ORDER BY t.changed LIMIT 1000").all(cutoff);
+  for (const row of targets) db.prepare("DELETE FROM delivery_targets WHERE digest=? AND state='free' AND lock_nonce IS NULL").run(row.digest);
+}
+
+function deliveryBindingRow(row) {
+  const capabilities = safeJson(row.capabilities);
+  if (!exactRecord(capabilities, ["context", "idle", "launch"]) || Object.values(capabilities).some((value) => typeof value !== "boolean")) throw new Fault("schema", "Delivery binding capabilities are invalid");
+  return { id: row.id, authority: row.authority, worker: row.worker, sid: row.sid, epoch: Number(row.epoch), targetDigest: row.target,
+    target: { runtimeInstance: row.runtime_instance, profile: row.profile, nativeSession: row.native_session, lifecycleGeneration: row.lifecycle_generation },
+    capabilities, generation: Number(row.generation), ownerGeneration: Number(row.owner_generation), state: row.state, init: Number(row.init), changed: Number(row.changed) };
+}
+
+function deliveryScopeRow(row) {
+  return { binding: row.binding, bindingGeneration: Number(row.binding_generation), authority: row.authority, worker: row.worker, sid: row.sid, epoch: Number(row.epoch), revision: row.revision,
+    pending: { msg: Number(row.pending_msg), work: Number(row.pending_work) }, recoverable: { msg: Number(row.recoverable_msg), work: Number(row.recoverable_work) } };
+}
+
+function deliveryAttemptRow(row, scopes) {
+  if (row.reason_code !== null && !deliveryReasonCodes.has(row.reason_code)) throw new Fault("schema", "Delivery attempt reason code is invalid");
+  return { id: row.id, targetDigest: row.target, ownerGeneration: Number(row.owner_generation), state: row.state, nativeRequestId: row.native_request_id ?? null,
+    deadline: Number(row.deadline), retries: Number(row.retries), retryAt: row.retry_at === null ? null : Number(row.retry_at), reasonCode: row.reason_code ?? null,
+    submittingAt: row.submitting_at === null ? null : Number(row.submitting_at), admittedAt: row.admitted_at === null ? null : Number(row.admitted_at),
+    contextAt: row.context_at === null ? null : Number(row.context_at), turnAt: row.turn_at === null ? null : Number(row.turn_at),
+    safeIdleAt: row.safe_idle_at === null ? null : Number(row.safe_idle_at), reconciledAt: row.reconciled_at === null ? null : Number(row.reconciled_at),
+    reconcileOutcome: row.reconcile_outcome ?? null, init: Number(row.init), changed: Number(row.changed), scopes };
+}
+
+/** Claim the CORE-owned host-local generation after the broker's exclusive lifecycle lock is held. */
+export function claimDeliveryOwner(relay) {
+  const store = deliverySchemaStore(relay);
+  if (!/^[a-f0-9]{64}$/.test(store.deliveryOwnerProof ?? "")) throw new Fault("owner", "Delivery owner proof is unavailable");
+  const generation = tx(relay, "write", ({ db, now }) => {
+    const row = deliveryOwnerRow(db);
+    if (row.ownerHash === store.deliveryOwnerProof) return row.generation;
+    if (row.generation >= Number.MAX_SAFE_INTEGER) throw new Fault("full", "Delivery owner generations are exhausted");
+    const next = row.generation + 1;
+    db.prepare("UPDATE delivery_owners SET owner_hash=?,generation=?,changed=? WHERE singleton=1").run(store.deliveryOwnerProof, next, now);
+    db.prepare("UPDATE delivery_bindings SET state='stale',changed=? WHERE state='active'").run(now);
+    const reserved = db.prepare("SELECT id,target FROM delivery_attempts WHERE state='reserved'").all();
+    for (const attempt of reserved) {
+      db.prepare("UPDATE delivery_attempts SET state='refused',reason_code='owner-recovery',changed=? WHERE id=? AND state='reserved'").run(now, attempt.id);
+      db.prepare("UPDATE delivery_targets SET state='free',attempt=NULL,changed=? WHERE digest=? AND attempt=? AND state='reserved'").run(now, attempt.target, attempt.id);
+    }
+    return next;
+  });
+  cleanupReleasedTargetLocks(relay);
+  return Object.freeze({ generation });
+}
+
+/** Stop future fenced mutations without releasing unresolved native target gates. */
+export function releaseDeliveryOwner(relay, ownerGeneration) {
+  const store = deliverySchemaStore(relay);
+  input(Number.isSafeInteger(ownerGeneration) && ownerGeneration > 0, "Invalid delivery owner generation");
+  return tx(relay, "write", ({ db, now }) => {
+    assertDeliveryOwner(db, store, ownerGeneration);
+    db.prepare("UPDATE delivery_bindings SET state='stale',changed=? WHERE state='active' AND owner_generation=?").run(now, ownerGeneration);
+    db.prepare("UPDATE delivery_owners SET owner_hash=NULL,changed=? WHERE singleton=1 AND owner_hash=? AND generation=?").run(now, store.deliveryOwnerProof, ownerGeneration);
+    return Object.freeze({ generation: ownerGeneration, released: true });
+  });
+}
+
+/** Add or refresh an exact recipient/native-session binding in the owner's private store. */
+export function bindDeliverySession(relay, value) {
+  canonicalJson(value, 8192);
+  input(exactRecord(value, ["authority", "capabilities", "epoch", "ownerGeneration", "sid", "target", "worker"]), "Invalid delivery binding fields");
+  const store = deliverySchemaStore(relay);
+  input(Number.isSafeInteger(value.ownerGeneration) && value.ownerGeneration > 0 && Number.isSafeInteger(value.epoch) && value.epoch >= 0, "Invalid delivery binding generation");
+  validateDeliveryText(value.authority, "delivery authority", 128); validateAddress(value.worker); validateDeliveryText(value.sid, "Relay session ID", 128);
+  validateDeliveryTarget(value.target);
+  input(exactRecord(value.capabilities, ["context", "idle", "launch"]) && Object.values(value.capabilities).every((item) => typeof item === "boolean"), "Invalid delivery capabilities");
+  const targetDigest = deliveryTargetDigest(value.target);
+  const capabilities = canonicalJson(value.capabilities, 256).json;
+  return tx(relay, "write", ({ db, now }) => {
+    const ownerGeneration = assertDeliveryOwner(db, store, value.ownerGeneration);
+    if (value.authority === relay.authority) {
+      const session = getSession(db, value.sid, now);
+      if (session.worker !== value.worker || session.epoch !== value.epoch) throw new Fault("session", "Delivery binding is not the exact live recipient session");
+    }
+    pruneDeliveryHistory(db, now);
+    db.prepare("INSERT OR IGNORE INTO delivery_targets(digest,attempt,state,lock_nonce,init,changed) VALUES(?,NULL,'free',NULL,?,?)").run(targetDigest, now, now);
+    const prior = db.prepare("SELECT * FROM delivery_bindings WHERE authority=? AND worker=? AND sid=? AND epoch=? AND target=?").get(value.authority, value.worker, value.sid, value.epoch, targetDigest);
+    if (!prior && Number(db.prepare("SELECT COUNT(*) AS n FROM delivery_bindings WHERE state='active'").get().n) >= LIMITS.deliveryBindings) throw new Fault("full", "Delivery binding capacity is full");
+    if (!prior && deliveryRowCount(db) >= LIMITS.deliveryRows) throw new Fault("full", "Delivery coordination history is full");
+    const generation = prior ? Number(prior.generation) + (prior.state === "active" && Number(prior.owner_generation) === ownerGeneration && prior.capabilities === capabilities ? 0 : 1) : 1;
+    const bindingId = prior?.id ?? id();
+    if (prior) db.prepare("UPDATE delivery_bindings SET capabilities=?,generation=?,owner_generation=?,state='active',changed=? WHERE id=?").run(capabilities, generation, ownerGeneration, now, bindingId);
+    else db.prepare("INSERT INTO delivery_bindings(id,authority,worker,sid,epoch,target,runtime_instance,profile,native_session,lifecycle_generation,capabilities,generation,owner_generation,state,init,changed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?)")
+      .run(bindingId, value.authority, value.worker, value.sid, value.epoch, targetDigest, value.target.runtimeInstance, value.target.profile, value.target.nativeSession, value.target.lifecycleGeneration, capabilities, generation, ownerGeneration, now, now);
+    return deliveryBindingRow(db.prepare("SELECT * FROM delivery_bindings WHERE id=?").get(bindingId));
+  });
+}
+
+export function endDeliveryBinding(relay, value) {
+  input(exactRecord(value, ["binding", "generation", "ownerGeneration"]), "Invalid delivery binding end");
+  validateDeliveryText(value.binding, "delivery binding ID", 128);
+  input(Number.isSafeInteger(value.generation) && value.generation > 0 && Number.isSafeInteger(value.ownerGeneration) && value.ownerGeneration > 0, "Invalid delivery binding generation");
+  const store = deliverySchemaStore(relay);
+  return tx(relay, "write", ({ db, now }) => {
+    assertDeliveryOwner(db, store, value.ownerGeneration);
+    const result = db.prepare("UPDATE delivery_bindings SET state='ended',changed=? WHERE id=? AND generation=? AND owner_generation=? AND state='active'").run(now, value.binding, value.generation, value.ownerGeneration);
+    if (Number(result.changes) !== 1) throw new Fault("owner", "Delivery binding generation is stale");
+    return Object.freeze({ binding: value.binding, generation: value.generation, state: "ended" });
+  });
+}
+
+export function listDeliveryBindings(relay, ownerGeneration) {
+  const store = deliverySchemaStore(relay);
+  input(Number.isSafeInteger(ownerGeneration) && ownerGeneration > 0, "Invalid delivery owner generation");
+  return tx(relay, "read", ({ db }) => {
+    assertDeliveryOwner(db, store, ownerGeneration);
+    return db.prepare("SELECT * FROM delivery_bindings WHERE state IN ('active','stale') ORDER BY init,id").all().map(deliveryBindingRow);
+  });
+}
+
+function validatePendingSummary(summary, binding) {
+  if (!exactRecord(summary, ["authority", "epoch", "pending", "recoverable", "revision", "v", "worker"]) || summary.v !== 1 || summary.authority !== binding.authority || summary.worker !== binding.worker || summary.epoch !== Number(binding.epoch) || !/^[a-f0-9]{64}$/.test(summary.revision ?? "")) throw new Fault("input", "Pending summary does not match its exact delivery binding");
+  for (const field of ["pending", "recoverable"]) {
+    if (!exactRecord(summary[field], ["msg", "work"]) || Object.values(summary[field]).some((count) => !Number.isSafeInteger(count) || count < 0)) throw new Fault("input", "Pending summary counts are invalid");
+  }
+}
+
+/** Persist one payload-free attempt and its coalesced authority scopes before native submission. */
+export function reserveDeliveryAttempt(relay, value) {
+  canonicalJson(value, LIMITS.requestBytes);
+  input(exactRecord(value, ["bindings", "id", "ownerGeneration"]), "Invalid delivery attempt reservation");
+  input(typeof value.id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.id) && Number.isSafeInteger(value.ownerGeneration) && value.ownerGeneration > 0, "Invalid delivery attempt identity");
+  input(Array.isArray(value.bindings) && value.bindings.length >= 1 && value.bindings.length <= LIMITS.deliveryBindingsMax, "Invalid delivery attempt scopes");
+  const seen = new Set();
+  for (const scope of value.bindings) {
+    input(exactRecord(scope, ["binding", "generation", "summary"]) && typeof scope.binding === "string" && scope.binding.length > 0 && scope.binding.length <= 128 && Number.isSafeInteger(scope.generation) && scope.generation > 0, "Invalid delivery attempt scope");
+    if (seen.has(scope.binding)) throw new Fault("input", "Duplicate delivery attempt scope");
+    seen.add(scope.binding);
+  }
+  const store = deliverySchemaStore(relay);
+  tx(relay, "read", ({ db }) => assertDeliveryOwner(db, store, value.ownerGeneration));
+  cleanupReleasedTargetLocks(relay);
+  deliveryLockDirectory(true);
+  const nonce = randomBytes(24).toString("base64url");
+  const digest = tx(relay, "write", ({ db, now }) => {
+    const ownerGeneration = assertDeliveryOwner(db, store, value.ownerGeneration);
+    if (db.prepare("SELECT 1 FROM delivery_attempts WHERE id=?").get(value.id)) throw new Fault("rpc_conflict", "Delivery attempt ID already exists");
+    const bindings = value.bindings.map((scope) => {
+      const row = db.prepare("SELECT * FROM delivery_bindings WHERE id=? AND generation=? AND owner_generation=? AND state='active'").get(scope.binding, scope.generation, ownerGeneration);
+      if (!row) throw new Fault("owner", "Delivery binding generation is stale");
+      validatePendingSummary(scope.summary, row);
+      return { scope, row };
+    });
+    const target = bindings[0].row.target;
+    if (bindings.some(({ row }) => row.target !== target)) throw new Fault("input", "One attempt cannot cross native target gates");
+    db.prepare("INSERT OR IGNORE INTO delivery_targets(digest,attempt,state,lock_nonce,init,changed) VALUES(?,NULL,'free',NULL,?,?)").run(target, now, now);
+    const gate = db.prepare("SELECT * FROM delivery_targets WHERE digest=?").get(target);
+    if (gate.state !== "free" || gate.attempt !== null || gate.lock_nonce !== null) throw new Fault("active", "Native target dispatch gate is occupied");
+    if (deliveryRowCount(db) + bindings.length + 1 > LIMITS.deliveryRows) throw new Fault("full", "Delivery coordination history is full");
+    const deadline = now + LIMITS.deliveryDeadlineMs;
+    db.prepare("INSERT INTO delivery_attempts(id,target,owner_generation,state,native_request_id,deadline,retries,retry_at,reason_code,init,changed) VALUES(?,?,?,'reserved',NULL,?,0,NULL,NULL,?,?)")
+      .run(value.id, target, ownerGeneration, deadline, now, now);
+    for (const { scope, row } of bindings) db.prepare("INSERT INTO delivery_attempt_scopes(attempt,binding,binding_generation,authority,worker,sid,epoch,revision,pending_msg,pending_work,recoverable_msg,recoverable_work,init) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(value.id, row.id, row.generation, row.authority, row.worker, row.sid, row.epoch, scope.summary.revision, scope.summary.pending.msg, scope.summary.pending.work, scope.summary.recoverable.msg, scope.summary.recoverable.work, now);
+    db.prepare("UPDATE delivery_targets SET attempt=?,state='reserved',lock_nonce=?,changed=? WHERE digest=? AND state='free' AND attempt IS NULL AND lock_nonce IS NULL").run(value.id, nonce, now, target);
+    return target;
+  });
+  try { createTargetLock(digest, nonce); }
+  catch (error) {
+    let reasonCode = error instanceof Fault && error.code === "active" ? "target-owned" : "native-unavailable";
+    if (reasonCode !== "target-owned") {
+      const persistedNonce = readTargetLockNonce(digest);
+      if (persistedNonce === nonce) unlinkSync(join(deliveryLockDirectory(false), `${digest}.lock`));
+      else if (persistedNonce !== null) reasonCode = "target-owned";
+    }
+    tx(relay, "write", ({ db, now }) => {
+      assertDeliveryOwner(db, store, value.ownerGeneration);
+      db.prepare("UPDATE delivery_attempts SET state='refused',reason_code=?,changed=? WHERE id=? AND state='reserved'").run(reasonCode, now, value.id);
+      db.prepare("UPDATE delivery_targets SET state='free',attempt=NULL,lock_nonce=NULL,changed=? WHERE digest=? AND attempt=? AND lock_nonce=? AND state='reserved'").run(now, digest, value.id, nonce);
+    });
+    throw error;
+  }
+  return Object.freeze({ id: value.id, targetDigest: digest, state: "reserved", deadline: tx(relay, "read", ({ db }) => Number(db.prepare("SELECT deadline FROM delivery_attempts WHERE id=?").get(value.id).deadline)) });
+}
+
+function validateDeliveryReferences(value, attempt, db, ownerGeneration, { submission = false } = {}) {
+  input(Array.isArray(value) && value.length >= 1 && value.length <= LIMITS.deliveryBindingsMax, "Invalid delivery binding references");
+  const refs = new Map();
+  for (const ref of value) {
+    input(exactRecord(ref, ["binding", "generation"]) && typeof ref.binding === "string" && ref.binding.length > 0 && ref.binding.length <= 128 && Number.isSafeInteger(ref.generation) && ref.generation > 0, "Invalid delivery binding reference");
+    if (refs.has(ref.binding)) throw new Fault("input", "Duplicate delivery binding reference");
+    const row = db.prepare("SELECT target FROM delivery_bindings WHERE id=? AND generation=? AND owner_generation=? AND state='active'").get(ref.binding, ref.generation, ownerGeneration);
+    if (!row || row.target !== attempt.target) throw new Fault("owner", "Delivery binding generation is stale");
+    refs.set(ref.binding, ref.generation);
+  }
+  if (submission) {
+    const scopes = db.prepare("SELECT binding,binding_generation FROM delivery_attempt_scopes WHERE attempt=?").all(attempt.id);
+    if (scopes.length !== refs.size || scopes.some((scope) => refs.get(scope.binding) !== Number(scope.binding_generation))) throw new Fault("owner", "Delivery submission scope changed");
+  }
+}
+
+/** Fenced lifecycle update. The target remains locked until safe_idle, refusal, or explicit reconciliation. */
+export function transitionDeliveryAttempt(relay, value) {
+  canonicalJson(value, LIMITS.requestBytes);
+  const allowed = ["bindings", "from", "id", "nativeRequestId", "ownerGeneration", "reasonCode", "retryAt", "retrySafe", "retries", "to"];
+  input(value !== null && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+    && Reflect.ownKeys(value).every((key) => allowed.includes(key))
+    && ["bindings", "from", "id", "ownerGeneration", "to"].every((key) => Object.hasOwn(value, key)), "Invalid delivery transition fields");
+  input(typeof value.id === "string" && value.id.length > 0 && value.id.length <= 128 && Number.isSafeInteger(value.ownerGeneration) && value.ownerGeneration > 0, "Invalid delivery attempt identity");
+  input(typeof value.from === "string" && typeof value.to === "string" && deliveryTransitions[value.from]?.has(value.to), "Invalid delivery attempt transition");
+  if (value.reasonCode !== undefined && !deliveryReasonCodes.has(value.reasonCode)) throw new Fault("input", "Invalid delivery reason code");
+  if (value.nativeRequestId !== undefined) input(typeof value.nativeRequestId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.nativeRequestId), "Invalid native request ID");
+  if (value.retrySafe !== undefined) input(typeof value.retrySafe === "boolean", "Invalid retry safety flag");
+  const store = deliverySchemaStore(relay);
+  const result = tx(relay, "write", ({ db, now }) => {
+    assertDeliveryOwner(db, store, value.ownerGeneration);
+    const attempt = db.prepare("SELECT * FROM delivery_attempts WHERE id=?").get(value.id);
+    if (!attempt || attempt.state !== value.from) throw new Fault("rpc_conflict", "Delivery attempt state changed");
+    const target = db.prepare("SELECT * FROM delivery_targets WHERE digest=? AND attempt=?").get(attempt.target, attempt.id);
+    if (!target || target.state !== attempt.state) throw new Fault("schema", "Delivery target gate does not match its attempt");
+    const lockNonce = readTargetLockNonce(attempt.target);
+    if (lockNonce !== target.lock_nonce) throw new Fault("active", "Native target exclusion token is missing or changed");
+    validateDeliveryReferences(value.bindings, attempt, db, value.ownerGeneration, { submission: value.to === "submitting" && value.from === "reserved" });
+    let retries = Number(attempt.retries);
+    let retryAt = null;
+    if (value.to === "submitting") {
+      if (now > Number(attempt.deadline)) throw new Fault("timeout", "Native submission deadline elapsed");
+      if (value.from === "uncertain") {
+        if (value.retrySafe !== true || attempt.retry_at === null || Number(attempt.retry_at) > now || retries < 1) throw new Fault("uncertain", "Native retry is not yet safe");
+        if (value.nativeRequestId !== undefined && attempt.native_request_id !== value.nativeRequestId) throw new Fault("rpc_conflict", "Native retry identity changed");
+        retries = retries;
+      } else if (value.retrySafe !== undefined) throw new Fault("input", "Retry safety applies only to an uncertain retry");
+    }
+    if (value.to === "uncertain" && value.retrySafe === true) {
+      if (!Number.isSafeInteger(value.retryAt) || !Number.isSafeInteger(value.retries) || value.retries !== retries + 1 || value.retries > LIMITS.deliveryRetries || value.retryAt < now + LIMITS.deliveryRetryMinMs || value.retryAt > Math.min(now + LIMITS.deliveryRetryMaxMs, Number(attempt.deadline))) throw new Fault("input", "Unsafe delivery retry boundary");
+      retries = value.retries; retryAt = value.retryAt;
+    } else if (value.to === "uncertain" && (value.retryAt !== undefined || value.retries !== undefined || value.retrySafe === true)) throw new Fault("input", "Unqualified delivery retry is not allowed");
+    else if (value.retryAt !== undefined || value.retries !== undefined) throw new Fault("input", "Retry fields are not valid for this transition");
+    if (value.retrySafe === true && value.to !== "uncertain" && !(value.from === "uncertain" && value.to === "submitting")) throw new Fault("input", "Retry safety is not valid for this transition");
+    if (["held", "refused", "uncertain"].includes(value.to) && !value.reasonCode) throw new Fault("input", "A bounded reason code is required");
+    const nativeRequestId = value.nativeRequestId ?? attempt.native_request_id ?? null;
+    if (attempt.native_request_id !== null && nativeRequestId !== attempt.native_request_id) throw new Fault("rpc_conflict", "Native request identity changed");
+    if (value.from === "uncertain" && value.to === "submitting" && value.retrySafe === true && retries > LIMITS.deliveryRetries) throw new Fault("full", "Delivery retry limit is exhausted");
+    const timestampField = { submitting: "submitting_at", admitted: "admitted_at", context_observed: "context_at", turn_started: "turn_at", safe_idle: "safe_idle_at" }[value.to];
+    const assignments = ["state=?", "native_request_id=?", "retry_at=?", "retries=?", "reason_code=?", "changed=?"];
+    const params = [value.to, nativeRequestId, retryAt, retries, value.reasonCode ?? null, now];
+    if (timestampField) { assignments.push(`${timestampField}=COALESCE(${timestampField},?)`); params.push(now); }
+    params.push(value.id, value.from);
+    db.prepare(`UPDATE delivery_attempts SET ${assignments.join(",")} WHERE id=? AND state=?`).run(...params);
+    if (deliveryTerminal.has(value.to)) db.prepare("UPDATE delivery_targets SET state='free',attempt=NULL,changed=? WHERE digest=? AND attempt=?").run(now, attempt.target, attempt.id);
+    else db.prepare("UPDATE delivery_targets SET state=?,changed=? WHERE digest=? AND attempt=?").run(value.to, now, attempt.target, attempt.id);
+    return deliveryAttemptRow(db.prepare("SELECT * FROM delivery_attempts WHERE id=?").get(value.id), db.prepare("SELECT * FROM delivery_attempt_scopes WHERE attempt=? ORDER BY init,binding").all(value.id).map(deliveryScopeRow));
+  });
+  if (deliveryTerminal.has(value.to)) cleanupReleasedTargetLocks(relay);
+  return result;
+}
+
+export function listDeliveryAttempts(relay, ownerGeneration) {
+  const store = deliverySchemaStore(relay);
+  input(Number.isSafeInteger(ownerGeneration) && ownerGeneration > 0, "Invalid delivery owner generation");
+  return tx(relay, "read", ({ db }) => {
+    assertDeliveryOwner(db, store, ownerGeneration);
+    return db.prepare("SELECT * FROM delivery_attempts ORDER BY init,id LIMIT ?").all(LIMITS.deliveryRows).map((row) => deliveryAttemptRow(row, db.prepare("SELECT * FROM delivery_attempt_scopes WHERE attempt=? ORDER BY init,binding").all(row.id).map(deliveryScopeRow)));
+  });
+}
+
+export function reconcileDeliveryAttempt(relay, value) {
+  input(exactRecord(value, ["confirm", "id", "outcome", "ownerGeneration", "reasonCode"]), "Invalid delivery reconciliation fields");
+  input(value.confirm === true && value.outcome === "observed" || value.confirm === true && value.outcome === "not-accepted", "Explicit reconciliation confirmation is required");
+  input(value.reasonCode === "operator-confirmed" && typeof value.id === "string" && value.id.length > 0 && value.id.length <= 128 && Number.isSafeInteger(value.ownerGeneration) && value.ownerGeneration > 0, "Invalid delivery reconciliation");
+  const store = deliverySchemaStore(relay);
+  if (store.deliveryReconciliation !== true) throw new Fault("denied", "Reconciliation requires the stopped-service broker lock");
+  const result = tx(relay, "write", ({ db, now }) => {
+    assertDeliveryOwner(db, store, value.ownerGeneration);
+    const attempt = db.prepare("SELECT * FROM delivery_attempts WHERE id=?").get(value.id);
+    if (!attempt || !["submitting", "admitted", "context_observed", "turn_started", "held", "uncertain"].includes(attempt.state)) throw new Fault("active", "Delivery attempt is not awaiting reconciliation");
+    const target = db.prepare("SELECT lock_nonce FROM delivery_targets WHERE digest=? AND attempt=?").get(attempt.target, attempt.id);
+    if (!target || target.lock_nonce !== readTargetLockNonce(attempt.target)) throw new Fault("active", "Native target exclusion token changed during reconciliation");
+    db.prepare("UPDATE delivery_attempts SET state='reconciled',retry_at=NULL,reason_code='operator-confirmed',reconciled_at=?,reconcile_outcome=?,changed=? WHERE id=?").run(now, value.outcome, now, value.id);
+    db.prepare("UPDATE delivery_targets SET state='free',attempt=NULL,changed=? WHERE digest=? AND attempt=?").run(now, attempt.target, attempt.id);
+    return { id: value.id, state: "reconciled", outcome: value.outcome };
+  });
+  cleanupReleasedTargetLocks(relay, tx(relay, "read", ({ db }) => db.prepare("SELECT target FROM delivery_attempts WHERE id=?").get(value.id).target));
+  return Object.freeze(result);
+}
+
+/** Redacted, read-only summary suitable for the local delivery-status command. */
+export function deliveryStatus(relay) {
+  deliverySchemaStore(relay);
+  return tx(relay, "read", ({ db }) => {
+    const bindings = Object.fromEntries(db.prepare("SELECT state,COUNT(*) AS n FROM delivery_bindings GROUP BY state").all().map((row) => [row.state, Number(row.n)]));
+    const attempts = Object.fromEntries(db.prepare("SELECT state,COUNT(*) AS n FROM delivery_attempts GROUP BY state").all().map((row) => [row.state, Number(row.n)]));
+    const target = db.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN state<>'free' OR lock_nonce IS NOT NULL THEN 1 ELSE 0 END) AS locked FROM delivery_targets").get();
+    const last = db.prepare("SELECT (SELECT MAX(changed) FROM delivery_attempts) AS changed,(SELECT MIN(retry_at) FROM delivery_attempts WHERE state IN ('reserved','submitting','admitted','context_observed','turn_started','held','uncertain')) AS retry_at").get();
+    const reasonRows = db.prepare("SELECT reason_code,COUNT(*) AS n FROM delivery_attempts WHERE reason_code IS NOT NULL GROUP BY reason_code ORDER BY reason_code").all();
+    if (reasonRows.some((row) => !deliveryReasonCodes.has(row.reason_code))) throw new Fault("schema", "Delivery attempt reason code is invalid");
+    const reasons = Object.fromEntries(reasonRows.map((row) => [row.reason_code, Number(row.n)]));
+    const owner = deliveryOwnerRow(db);
+    return Object.freeze({ owner: { active: owner.ownerHash !== null, generation: owner.generation },
+      bindings, attempts, targets: { total: Number(target.total), locked: Number(target.locked ?? 0) }, lastChanged: last.changed === null ? null : Number(last.changed), retryAt: last.retry_at === null ? null : Number(last.retry_at), reasons });
+  });
+}
+
 function encodeCursor(token) { return Buffer.from(canonicalJson(token, 1024).json).toString("base64url"); }
 function encodeSnapshotCursor(token) { return Buffer.from(canonicalJson(token, 1024).json).toString("base64url"); }
 function encodeFeedCursor(token) { return Buffer.from(canonicalJson(token, 512).json).toString("base64url"); }
@@ -748,20 +1202,25 @@ export function setup(options) {
   catch (error) { closeDatabase(store); throw error; }
 }
 export function openForBroker(options) {
+  assertOptions(options, ["root", "role", "ownerToken", "reconciliation"], "broker open");
+  input(options.ownerToken === undefined || typeof options.ownerToken === "string" && /^[A-Za-z0-9_-]{32}$/.test(options.ownerToken), "Invalid broker owner token");
+  input(options.reconciliation === undefined || typeof options.reconciliation === "boolean", "Invalid reconciliation mode");
   const store = openDatabase({ root: options.root, create: false, readOnly: false, busyTimeoutMs: LIMITS.brokerBusyTimeoutMs });
   try {
     const loaded = loadStore(store, { role: options.role });
+    if (options.ownerToken) loaded.deliveryOwnerProof = sha(options.ownerToken);
+    loaded.deliveryReconciliation = options.reconciliation === true;
     return makeRelay(loaded);
   } catch (error) { closeDatabase(store); throw error; }
 }
 
-const readOps = new Set(["get", "list", "stats", "audit", "snapshot", "attempt"]);
-const rpcOps = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "stats", "audit", "report", "snapshot", "attempt"]);
+const readOps = new Set(["get", "list", "pending", "stats", "audit", "snapshot", "attempt"]);
+const rpcOps = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "pending", "stats", "audit", "report", "snapshot", "attempt"]);
 const rpcFields = {
   register: ["runtime", "options"], enroll: ["device"], join: ["worker", "options"], resume: ["sid"], renew: ["sid"], leave: ["sid"],
   send: ["sid", "to", "envelope", "options"], post: ["sid", "board", "envelope", "options"], claim: ["sid", "options"],
   touch: ["sid", "lease"], ack: ["sid", "lease", "outcome"], release: ["sid", "lease"], get: ["id", "options"], list: ["options"],
-  stats: [], audit: ["options"], report: ["sid", "report"], snapshot: ["options"], attempt: ["sid", "lease"],
+  pending: ["sid"], stats: [], audit: ["options"], report: ["sid", "report"], snapshot: ["options"], attempt: ["sid", "lease"],
 };
 function grantHas(list, value) { return Array.isArray(list) && list.includes(value); }
 function canReadMessage(authorization, row) {
@@ -803,6 +1262,9 @@ function authorizeCore(relay, authorization, op, args) {
     }
   } else if (op === "get") {
     // Row-dependent scope is checked in the same transaction below.
+  } else if (op === "pending") {
+    const row = relay._store.db.prepare("SELECT s.worker,s.principal,s.epoch,a.epoch AS current_epoch FROM sessions s JOIN agents a ON a.id=s.worker WHERE s.id=?").get(args.sid);
+    if (!row || row.principal !== principal.id || row.epoch !== row.current_epoch || !grantHas(grant.workers, row.worker)) throw new Fault("denied", "Recipient session is outside this principal scope", { sid: args.sid });
   } else if (["list", "stats", "audit", "snapshot"].includes(op)) {
     if (op === "audit" && !grant.inspect?.audit) throw new Fault("denied", "Audit inspection is not permitted");
     if (op === "snapshot" && !grant.inspect?.topology) throw new Fault("denied", "Topology inspection is not permitted");
@@ -847,6 +1309,7 @@ function invoke(relay, op, args, authorization) {
     case "release": return relay.release(args.sid, args.lease);
     case "get": return relay.get(args.id, args.options, authorization);
     case "list": return relay.list(args.options, authorization);
+    case "pending": return relay.pending(args.sid);
     case "stats": return relay.stats();
     case "audit": return relay.audit(args.options);
     case "report": return relay.report(args.sid, args.report, authorization);
@@ -872,6 +1335,13 @@ export function dispatchRpc(relay, { authorization, rid, op, args, beforeCommit 
   const hash = fingerprint({ v: 1, op, args });
   const write = !readOps.has(op);
   return tx(relay, write ? "write" : "read", ({ db, now }) => {
+    beforeCommit();
+    authorizeCore(relay, authorization, op, args);
+    if (!write) {
+      const result = invoke(relay, op, args, authorization);
+      beforeCommit();
+      return { v: 1, rid, committedAt: null, replayed: false, result, remainingMs: null };
+    }
     if (write) {
       db.prepare("DELETE FROM rpc WHERE until<=?").run(now);
       const usage = db.prepare("SELECT COUNT(*) AS rows,COALESCE(SUM(bytes),0) AS bytes FROM rpc").get();
@@ -899,10 +1369,10 @@ export function dispatchRpc(relay, { authorization, rid, op, args, beforeCommit 
     const json = JSON.stringify(stored);
     const bytes = Buffer.byteLength(json);
     if (Number(db.prepare("SELECT COALESCE(SUM(bytes),0) AS n FROM rpc").get().n) + bytes > relay._store.policy.rpcBytes) throw new Fault("full", "RPC journal byte capacity is full");
-    if (op !== "attempt") db.prepare("INSERT INTO rpc(principal,rid,op,hash,committed,until,worker,sid,epoch,mid,lease,result,bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    db.prepare("INSERT INTO rpc(principal,rid,op,hash,committed,until,worker,sid,epoch,mid,lease,result,bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .run(principal, rid, op, hash, now, now + relay._store.policy.rpcRetentionMs, worker, sid, epoch, mid, lease, json, bytes);
     beforeCommit();
-    return { v: 1, rid, committedAt: op === "attempt" ? null : now, replayed: false, result, remainingMs: op === "claim" && result ? Math.max(0, result.until - Date.now()) : null };
+    return { v: 1, rid, committedAt: now, replayed: false, result, remainingMs: op === "claim" && result ? Math.max(0, result.until - Date.now()) : null };
   });
 }
 

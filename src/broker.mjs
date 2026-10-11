@@ -19,7 +19,7 @@ const MAX_BODY = 131072;
 const MAX_RESPONSE = 1048576;
 const REQUEST_MS = 10000;
 const RID = /^[A-Za-z0-9._:-]{1,128}$/;
-const OPS = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "stats", "audit", "report", "snapshot", "attempt"]);
+const OPS = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "pending", "stats", "audit", "report", "snapshot", "attempt"]);
 const PUBLIC_ASSETS = new Map([["/", "index.html"], ["/index.html", "index.html"], ["/main.mjs", "main.mjs"], ["/state.mjs", "state.mjs"], ["/style.css", "style.css"]]);
 const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../ui");
 const fail = (code, message) => { throw new Fault(code, message); };

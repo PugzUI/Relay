@@ -18,7 +18,10 @@ export const LIMITS = Object.freeze({
   reportIntervalMs: 10000, reportStaleMs: 30000, maxCredentials: 256,
   rateIdleMs: 120000, poolMaxAgents: 8, poolMaxJobs: 1, poolPollMs: 1000,
   poolMinBackoffMs: 250, poolMaxBackoffMs: 10000, launchMaxChildren: 16,
-  launchReadyTimeoutMs: 10000,
+  launchReadyTimeoutMs: 10000, deliveryBindings: 64, deliveryBindingsMax: 512,
+  deliveryRows: 10000, deliveryPollMs: 1000, deliveryPollMinMs: 250, deliveryPollMaxMs: 30000,
+  deliveryNativeCalls: 4, deliveryDeadlineMs: 10000, deliveryRetryMinMs: 250,
+  deliveryRetryMaxMs: 10000, deliveryRetries: 3, deliveryNoticeBytes: 2048,
 });
 
 const invalid = (message) => { throw new Fault("input", message); };

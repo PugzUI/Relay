@@ -1,4 +1,3 @@
-PRAGMA user_version = 2;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, folded TEXT NOT NULL UNIQUE, init INTEGER NOT NULL
@@ -76,3 +75,54 @@ CREATE TABLE IF NOT EXISTS report_events (
   type TEXT NOT NULL, source TEXT, target TEXT, mid TEXT, state TEXT, code TEXT,
   PRIMARY KEY(device,sid,source_seq)
 ) STRICT;
+
+-- DELIVERY_SCHEMA_V3_START
+CREATE TABLE IF NOT EXISTS delivery_owners (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner_hash TEXT,
+  generation INTEGER NOT NULL CHECK(generation>=0), changed INTEGER NOT NULL
+) STRICT;
+INSERT OR IGNORE INTO delivery_owners(singleton,owner_hash,generation,changed) VALUES(1,NULL,0,0);
+CREATE TABLE IF NOT EXISTS delivery_targets (
+  digest TEXT PRIMARY KEY CHECK(length(digest)=64 AND digest NOT GLOB '*[^0-9a-f]*'),
+  attempt TEXT, state TEXT NOT NULL CHECK(state IN ('free','reserved','submitting','admitted','context_observed','turn_started','held','uncertain')),
+  lock_nonce TEXT, init INTEGER NOT NULL, changed INTEGER NOT NULL,
+  CHECK((state='free' AND attempt IS NULL) OR (state<>'free' AND attempt IS NOT NULL))
+) STRICT;
+CREATE TABLE IF NOT EXISTS delivery_bindings (
+  id TEXT PRIMARY KEY, authority TEXT NOT NULL, worker TEXT NOT NULL, sid TEXT NOT NULL,
+  epoch INTEGER NOT NULL CHECK(epoch>=0), target TEXT NOT NULL REFERENCES delivery_targets(digest),
+  runtime_instance TEXT NOT NULL, profile TEXT NOT NULL, native_session TEXT NOT NULL,
+  lifecycle_generation TEXT NOT NULL, capabilities TEXT NOT NULL,
+  generation INTEGER NOT NULL CHECK(generation>0), owner_generation INTEGER NOT NULL CHECK(owner_generation>0),
+  state TEXT NOT NULL CHECK(state IN ('active','stale','ended')),
+  init INTEGER NOT NULL, changed INTEGER NOT NULL,
+  UNIQUE(authority,worker,sid,epoch,target)
+) STRICT;
+CREATE INDEX IF NOT EXISTS delivery_bindings_state ON delivery_bindings(state,owner_generation,changed);
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+  id TEXT PRIMARY KEY, target TEXT NOT NULL REFERENCES delivery_targets(digest),
+  owner_generation INTEGER NOT NULL CHECK(owner_generation>0),
+  state TEXT NOT NULL CHECK(state IN ('reserved','submitting','admitted','context_observed','turn_started','safe_idle','held','refused','uncertain','reconciled')),
+  native_request_id TEXT, deadline INTEGER NOT NULL, retries INTEGER NOT NULL DEFAULT 0 CHECK(retries BETWEEN 0 AND 3),
+  retry_at INTEGER, reason_code TEXT,
+  submitting_at INTEGER, admitted_at INTEGER, context_at INTEGER, turn_at INTEGER,
+  safe_idle_at INTEGER, reconciled_at INTEGER, reconcile_outcome TEXT CHECK(reconcile_outcome IS NULL OR reconcile_outcome IN ('observed','not-accepted')),
+  init INTEGER NOT NULL, changed INTEGER NOT NULL,
+  CHECK((state='reconciled' AND reconcile_outcome IS NOT NULL) OR state<>'reconciled')
+) STRICT;
+CREATE INDEX IF NOT EXISTS delivery_attempts_target ON delivery_attempts(target,changed DESC);
+CREATE INDEX IF NOT EXISTS delivery_attempts_state ON delivery_attempts(state,changed);
+CREATE TABLE IF NOT EXISTS delivery_attempt_scopes (
+  attempt TEXT NOT NULL REFERENCES delivery_attempts(id) ON DELETE RESTRICT,
+  binding TEXT NOT NULL REFERENCES delivery_bindings(id) ON DELETE RESTRICT,
+  binding_generation INTEGER NOT NULL CHECK(binding_generation>0),
+  authority TEXT NOT NULL, worker TEXT NOT NULL, sid TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>=0),
+  revision TEXT NOT NULL CHECK(length(revision)=64 AND revision NOT GLOB '*[^0-9a-f]*'),
+  pending_msg INTEGER NOT NULL CHECK(pending_msg>=0), pending_work INTEGER NOT NULL CHECK(pending_work>=0),
+  recoverable_msg INTEGER NOT NULL CHECK(recoverable_msg>=0), recoverable_work INTEGER NOT NULL CHECK(recoverable_work>=0),
+  init INTEGER NOT NULL,
+  PRIMARY KEY(attempt,binding)
+) STRICT;
+CREATE INDEX IF NOT EXISTS delivery_attempt_scopes_binding ON delivery_attempt_scopes(binding,init);
+-- DELIVERY_SCHEMA_V3_END
+PRAGMA user_version = 3;

@@ -11,7 +11,7 @@ import { LIMITS, canonicalJson as encodeJson, validateEnvelope } from "./validat
 const clients = new WeakMap();
 const ambiguousResponses = new WeakSet();
 const clientToken = Symbol("Client construction");
-const ops = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "stats", "audit", "report", "snapshot", "attempt"]);
+const ops = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "get", "list", "pending", "stats", "audit", "report", "snapshot", "attempt"]);
 const mutating = new Set(["register", "enroll", "join", "resume", "renew", "leave", "send", "post", "claim", "touch", "ack", "release", "report"]);
 const fail = (code, message, context) => { throw new Fault(code, message, context); };
 const ambiguousFault = (message) => { const error = new Fault("protocol", message); ambiguousResponses.add(error); return error; };
@@ -147,6 +147,7 @@ function validResult(op, value) {
   if (op === "release") return validRelease(value);
   if (op === "get") return value === null || validMessage(value);
   if (op === "list") return validPage(value, validMessage);
+  if (op === "pending") return ownShape(value, ["v", "authority", "worker", "epoch", "revision", "pending", "recoverable"]) && value.v === 1 && id(value.authority) && address(value.worker) && integer(value.epoch) && typeof value.revision === "string" && /^[0-9a-f]{64}$/.test(value.revision) && [value.pending, value.recoverable].every((counts) => ownShape(counts, ["msg", "work"]) && integer(counts.msg) && integer(counts.work));
   if (op === "audit") return validPage(value, (v) => ownShape(v, ["seq", "time", "type", "worker", "sid", "mid", "lease", "code"]) && integer(v.seq) && integer(v.time) && typeof v.type === "string" && (v.worker === null || id(v.worker)) && (v.sid === null || id(v.sid)) && (v.mid === null || id(v.mid)) && (v.lease === null || id(v.lease)) && (v.code === null || typeof v.code === "string"));
   if (op === "stats") return validStats(value);
   if (op === "report") return ownShape(value, ["accepted", "receivedAt", "staleAfter", "seq"]) && value.accepted === true && integer(value.receivedAt) && integer(value.staleAfter) && integer(value.seq);
@@ -212,6 +213,7 @@ export class Client {
   release(sid, lease) { return this.#call("release", { sid, lease }); }
   get(id, options) { return this.#call("get", { id, ...(options === undefined ? {} : { options }) }); }
   list(options) { return this.#call("list", { ...(options === undefined ? {} : { options }) }); }
+  pending(sid) { return this.#call("pending", { sid }); }
   stats() { return this.#call("stats", {}); }
   audit(options) { return this.#call("audit", { ...(options === undefined ? {} : { options }) }); }
   report(sid, report) { return this.#call("report", { sid, report }); }

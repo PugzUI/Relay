@@ -355,6 +355,67 @@ test("hub enrollment, device-qualified sessions, board isolation, and explicit m
   assert.equal((await env.host.list({ board: env.hostBoard, kind: "msg" })).items[0].state, "posted");
 });
 
+test("authenticated pending RPC is non-consuming, permission-scoped, and reports expiry and requeue revisions", async (t) => {
+  const env = await createPair(t);
+  const grant = emptyGrant();
+  grant.workers = [env.worker];
+  grant.recipients = [env.worker];
+  const tokenDigest = createHash("sha256").update(env.hubToken).digest("hex");
+  await privateWrite(path.join(env.hubRoot, "credentials.json"), `${JSON.stringify({
+    version: 1,
+    credentials: [{ principal: "east-host", tokenDigest, grant }],
+  })}\n`);
+  const observer = open({ root: env.hubRoot, readOnly: true });
+  env.owned.relays.push(observer);
+  await waitForFreshRateWindow();
+
+  const message = await env.hub.send(env.hubSid, env.worker, { msg: "private inbox body" });
+  await env.hub.send(env.hubSid, env.worker, { work: { secret: "private work body" } });
+  const databaseState = () => JSON.stringify(Object.fromEntries(["messages", "leases", "audit", "rpc"].map((table) => [
+    table, observer._store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+  ])));
+  const beforeRead = databaseState();
+  await assert.rejects(env.hub.pending("unscoped-session"), (error) => error.code === "denied");
+  assert.equal(databaseState(), beforeRead);
+  const initial = await env.hub.pending(env.hubSid);
+  assert.deepEqual(initial.pending, { msg: 1, work: 1 });
+  assert.deepEqual(initial.recoverable, { msg: 0, work: 0 });
+  assert.equal(JSON.stringify(initial).includes("private"), false);
+  assert.equal(JSON.stringify(initial).includes(message.id), false);
+  assert.deepEqual(await env.hub.pending(env.hubSid), initial);
+  assert.equal(databaseState(), beforeRead);
+
+  const lease = await env.hub.claim(env.hubSid, { kind: "msg" });
+  const claimed = await env.hub.pending(env.hubSid);
+  assert.deepEqual(claimed.pending, { msg: 0, work: 1 });
+  const beforeExpiredRead = databaseState();
+  const realNow = Date.now;
+  try {
+    Date.now = () => lease.until;
+    const expired = await env.hub.pending(env.hubSid);
+    assert.deepEqual(expired.recoverable, { msg: 1, work: 0 });
+    assert.notEqual(expired.revision, claimed.revision);
+    assert.equal(databaseState(), beforeExpiredRead);
+    const retry = await env.hub.claim(env.hubSid, { kind: "msg" });
+    assert.equal(retry.mid, message.id);
+    assert.equal(retry.attempt, lease.attempt + 1);
+    const requeued = await env.hub.pending(env.hubSid);
+    assert.notEqual(requeued.revision, expired.revision);
+    assert.deepEqual(requeued.recoverable, { msg: 0, work: 0 });
+
+    await waitForFreshRateWindow();
+    await env.hub.leave(env.hubSid);
+    const beforeStaleRead = databaseState();
+    await assert.rejects(env.hub.pending(env.hubSid), (error) => error.code === "session");
+    assert.equal(databaseState(), beforeStaleRead);
+
+    await privateWrite(path.join(env.hubRoot, "credentials.json"), `${JSON.stringify({ version: 1, credentials: [] })}\n`);
+    const beforeRevokedRead = databaseState();
+    await assert.rejects(env.hub.pending(env.hubSid), (error) => error.code === "auth");
+    assert.equal(databaseState(), beforeRevokedRead);
+  } finally { Date.now = realNow; }
+});
+
 test("authenticated topology and committed feed expose metadata without payload or session data", async (t) => {
   const env = await createPair(t);
   await waitForFreshRateWindow();

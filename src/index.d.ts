@@ -13,6 +13,21 @@ export type Envelope =
   | { msg: string; work?: never }
   | { work: JsonValue; msg?: never };
 
+export interface PendingCounts {
+  msg: number;
+  work: number;
+}
+
+export interface PendingSummary {
+  v: 1;
+  authority: string;
+  worker: WorkerAddress;
+  epoch: number;
+  revision: string;
+  pending: PendingCounts;
+  recoverable: PendingCounts;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -376,6 +391,7 @@ export declare class Relay {
   release(sid: string, lease: string): ReleaseReceipt;
   get(id: string, options?: GetOptions): Message | null;
   list(options?: ListOptions): Page<Message>;
+  pending(sid: string): PendingSummary;
   stats(): Stats;
   audit(options?: AuditOptions): Page<AuditEvent>;
   report(sid: string, report: ReportInput): ReportReceipt;
@@ -419,6 +435,7 @@ export declare class Client {
   release(sid: string, lease: string): Promise<ReleaseReceipt>;
   get(id: string, options?: GetOptions): Promise<Message | null>;
   list(options?: ListOptions): Promise<Page<Message>>;
+  pending(sid: string): Promise<PendingSummary>;
   stats(): Promise<Stats>;
   audit(options?: AuditOptions): Promise<Page<AuditEvent>>;
   report(sid: string, report: ReportInput): Promise<ReportReceipt>;
@@ -491,6 +508,18 @@ export interface Limits {
   poolMaxBackoffMs: number;
   launchMaxChildren: number;
   launchReadyTimeoutMs: number;
+  deliveryBindings: number;
+  deliveryBindingsMax: number;
+  deliveryRows: number;
+  deliveryPollMs: number;
+  deliveryPollMinMs: number;
+  deliveryPollMaxMs: number;
+  deliveryNativeCalls: number;
+  deliveryDeadlineMs: number;
+  deliveryRetryMinMs: number;
+  deliveryRetryMaxMs: number;
+  deliveryRetries: number;
+  deliveryNoticeBytes: number;
 }
 
 export const LIMITS: Readonly<Limits>;
