@@ -1634,9 +1634,10 @@ unsupported; they are not silently removed or downgraded.
 HTTPS client flags and returns exactly `PendingSummary`. `relay serve` remains
 the explicit foreground lifecycle owner; it starts one supervisor only when
 config v2 enables delivery, and `SIGINT`/`SIGTERM` stops it. `open()` and
-read-only commands never start a notifier. Local-only `relay delivery-status`
-is read-only and redacts all binding identifiers; local-only
-`relay delivery-reconcile ATTEMPT --outcome observed|not-accepted
+read-only commands never start a notifier. Local-only
+`relay delivery-status --root PATH --config FILE` is read-only and redacts all
+binding identifiers; local-only
+`relay delivery-reconcile ATTEMPT --root PATH --outcome observed|not-accepted
 --reason-code operator-confirmed --confirm` records an explicit operator
 outcome and never emits native input.
 
@@ -1644,7 +1645,8 @@ Fresh stores use schema v3. The new implementation continues to open schema v2
 for ordinary core operations and `pending()` while delivery is disabled;
 enabling delivery on v2 fails closed with the migration instruction. The sole
 upgrade is explicit `relay migrate --root PATH --to 3 --backup PATH`; rollback
-to v2 requires delivery disabled, no unresolved attempt/gate, and a new backup.
+to v2 requires `--config FILE` with delivery disabled, no unresolved attempt/gate,
+and a new backup.
 Both directions refuse unknown/corrupt schemas and unsafe/overwriting backup
 paths. They preserve messages, leases, receipts, sessions, audit, RPC journal,
 and immutable `init`; rollback retains delivery-only history in the backup.

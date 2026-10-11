@@ -3,6 +3,7 @@ import { open as openFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Fault } from "./fault.mjs";
+import { DELIVERY_CLIENTS, LIMITS } from "./validate.mjs";
 
 const fail = (message) => { throw new Fault("input", message); };
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -145,8 +146,21 @@ export async function readConfig(configFile) {
     if (error instanceof Fault) throw error;
     throw new Fault("unavailable", "Config file cannot be read");
   }
-  exact(doc, ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views"], "config");
-  if (doc.version !== 1 || !["host", "hub"].includes(doc.role) || !["local", "lan", "tailscale"].includes(doc.mode)) fail("Config version, role, or mode is invalid");
+  if (![1, 2].includes(doc.version)) fail("Config version is invalid");
+  exact(doc, doc.version === 1
+    ? ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views"]
+    : ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views", "delivery"], "config");
+  if (!["host", "hub"].includes(doc.role) || !["local", "lan", "tailscale"].includes(doc.mode)) fail("Config role or mode is invalid");
+  const delivery = doc.version === 1 ? Object.freeze({ enabled: false, clients: Object.freeze([]), pollMs: LIMITS.deliveryPollMs }) : (() => {
+    exact(doc.delivery, ["enabled", "clients", "pollMs"], "delivery");
+    if (typeof doc.delivery.enabled !== "boolean") fail("delivery.enabled is invalid");
+    if (!Array.isArray(doc.delivery.clients) || doc.delivery.clients.length > DELIVERY_CLIENTS.length || new Set(doc.delivery.clients).size !== doc.delivery.clients.length || doc.delivery.clients.some((client) => !DELIVERY_CLIENTS.includes(client))) fail("delivery.clients is invalid");
+    const clients = Object.freeze([...doc.delivery.clients]);
+    const pollMs = int(doc.delivery.pollMs, "delivery.pollMs", LIMITS.deliveryPollMinMs, LIMITS.deliveryPollMaxMs);
+    if (doc.delivery.enabled && (doc.role !== "host" || clients.length === 0)) fail("Enabled delivery requires a host and at least one client");
+    if (!doc.delivery.enabled && clients.length !== 0) fail("Disabled delivery requires an empty client selection");
+    return Object.freeze({ enabled: doc.delivery.enabled, clients, pollMs });
+  })();
   exact(doc.listen, ["host", "port"], "listen");
   const host = str(doc.listen.host, "listen.host", 64);
   const family = isIP(host);
@@ -194,5 +208,5 @@ export async function readConfig(configFile) {
     return Object.freeze({ deviceId, url: origin(view.url, "view.url"), tokenFile: pathValue(view.tokenFile, dirname(file), "view.tokenFile"), caFile: view.caFile === undefined ? undefined : pathValue(view.caFile, dirname(file), "view.caFile"), boards: [...view.boards] });
   });
   await privateFile(credentialsFile, "credential registry", { mode: true });
-  return Object.freeze({ version: 1, role: doc.role, mode: doc.mode, listen: Object.freeze({ host, port }), tls, allowedPeers: Object.freeze(allowedPeers), credentialsFile, hub, pool, views: Object.freeze(views), directory: dirname(file) });
+  return Object.freeze({ version: doc.version, role: doc.role, mode: doc.mode, listen: Object.freeze({ host, port }), tls, allowedPeers: Object.freeze(allowedPeers), credentialsFile, hub, pool, views: Object.freeze(views), delivery, directory: dirname(file) });
 }

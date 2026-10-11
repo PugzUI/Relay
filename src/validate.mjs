@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { Fault } from "./fault.mjs";
 
+export const DELIVERY_CLIENTS = Object.freeze(["codex", "cursor", "omp", "antigravity", "hermes", "zed", "zcode", "opencode", "kilo", "cline"]);
+
 export const LIMITS = Object.freeze({
   sessionMs: 120000, claimMs: 30000, resumeMs: 300000, keyMs: 86400000,
   payloadBytes: 65536, deviceNameChars: 63, runtimeNameChars: 32, slotDigitsMin: 3,

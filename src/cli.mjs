@@ -21,8 +21,12 @@ const route = {
   stats: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", json: "bool" }, readOnly: true },
   audit: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", after: "one", json: "bool" }, readOnly: true },
   snapshot: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", device: "one", limit: "one", after: "one", json: "bool" }, readOnly: true },
+  pending: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", sid: "one", json: "bool" }, readOnly: true },
   purge: { positionals: 0, flags: { root: "one", before: "one", dry: "bool", json: "bool" }, local: true },
   serve: { positionals: 0, flags: { root: "one", config: "one", json: "bool" }, local: true },
+  migrate: { positionals: 0, flags: { root: "one", to: "one", backup: "one", config: "one", json: "bool" }, local: true },
+  "delivery-status": { positionals: 0, flags: { root: "one", config: "one", json: "bool" }, local: true, readOnly: true },
+  "delivery-reconcile": { positionals: 1, flags: { root: "one", outcome: "one", "reason-code": "one", confirm: "bool", json: "bool" }, local: true },
 };
 
 export class CliInputError extends Error {
@@ -71,8 +75,10 @@ export function parseArgs(argv) {
   if (flags.role && !["host", "hub"].includes(flags.role)) throw new CliInputError("--role must be host or hub");
   if (command === "setup" && flags.role === "hub" && !flags.device) throw new CliInputError("hub setup requires --device");
   if (flags.kind && !["msg", "work"].includes(flags.kind)) throw new CliInputError("--kind must be msg or work");
-  if (flags.outcome && !["done", "failed", "rejected"].includes(flags.outcome)) throw new CliInputError("--outcome must be done, failed, or rejected");
+  if (command === "ack" && flags.outcome && !["done", "failed", "rejected"].includes(flags.outcome)) throw new CliInputError("--outcome must be done, failed, or rejected");
   if (flags.state && !["pending", "claimed", "posted", "done", "failed", "rejected"].includes(flags.state)) throw new CliInputError("invalid --state");
+  if (command === "delivery-reconcile" && (!flags.confirm || !["observed", "not-accepted"].includes(flags.outcome) || flags["reason-code"] !== "operator-confirmed")) throw new CliInputError("delivery reconciliation requires --outcome observed|not-accepted --reason-code operator-confirmed --confirm");
+  if (command === "migrate" && (!flags.to || !["2", "3"].includes(flags.to) || !flags.backup || flags.to === "2" && !flags.config || flags.to === "3" && flags.config)) throw new CliInputError("migrate requires --to 3 --backup PATH, or --to 2 --backup PATH --config FILE with delivery disabled");
   for (const name of ["cap", "need"]) {
     const values = flags[name] ?? [];
     if (values.length > 16 || new Set(values).size !== values.length) throw new CliInputError(`--${name} accepts at most 16 unique values`);
@@ -90,6 +96,7 @@ export function parseArgs(argv) {
   if (command === "setup" && !hasRoot) throw new CliInputError("setup requires --root");
   if (command === "enroll" && (!hasRoot || !flags.config)) throw new CliInputError("enroll requires --root and --config");
   if (command === "serve" && (!hasRoot || !flags.config)) throw new CliInputError("serve requires --root and --config");
+  if (command === "delivery-status" && !flags.config) throw new CliInputError("delivery-status requires --root and --config");
   if (command === "purge" && (!hasRoot || !flags.before)) throw new CliInputError("purge requires --root and --before");
   if (hasUrl) {
     if (!flags["token-file"]) throw new CliInputError("remote commands require --token-file");
@@ -108,6 +115,7 @@ export function parseArgs(argv) {
   if (flags["ca-file"] && flags.mode === "local") throw new CliInputError("--ca-file is not used in HTTP local mode");
   if (command === "register" && hasUrl && !flags.slot) throw new CliInputError("remote registration requires --slot");
   if (command === "send" || command === "post") required(flags, "sid");
+  if (command === "pending") required(flags, "sid");
   if (["claim", "touch", "ack", "release"].includes(command)) required(flags, "sid");
   if (command === "ack") required(flags, "outcome");
   return { command, positional, flags, readOnly: Boolean(spec.readOnly), help: false };
@@ -117,7 +125,7 @@ function required(flags, key) {
   if (!flags[key]) throw new CliInputError(`--${key} is required`);
 }
 
-const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list stats audit snapshot purge serve\n\nLocal routes use --root PATH. Remote routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP requires --mode local and a literal loopback URL. Use --json for exact JSON output.\n`;
+const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list pending stats audit snapshot purge migrate serve delivery-status delivery-reconcile\n\nLocal routes use --root PATH. Remote routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP requires --mode local and a literal loopback URL. Use delivery-status --root PATH --config FILE for read-only redacted diagnostics. Reconciliation requires --confirm and --reason-code operator-confirmed while the broker is stopped. Migration requires an unused backup path; rollback to v2 requires --config FILE with delivery disabled. Use --json for exact JSON output.\n`;
 
 export async function readEnvelope(stream = process.stdin) {
   const chunks = [];
@@ -241,6 +249,24 @@ export async function main(argv = process.argv.slice(2), io = process) {
       } finally { local.close(); }
     }
     if (command === "serve") return await serve(api, flags);
+    if (command === "migrate") {
+      const { migrateLocalStore } = await import("./broker.mjs");
+      const result = await migrateLocalStore({ root: flags.root, to: Number(flags.to), backup: flags.backup, ...(flags.config ? { configFile: flags.config } : {}) });
+      return output(result, flags.json, command, io);
+    }
+    if (command === "delivery-status") {
+      const [{ readConfig }, { deliveryStatus }, { inspectDeliveryAdapters }] = await Promise.all([import("./config.mjs"), import("./relay.mjs"), import("./delivery.mjs")]);
+      const config = await readConfig(flags.config);
+      handle = api.open({ root: flags.root, readOnly: true });
+      const core = deliveryStatus(handle);
+      const clients = await inspectDeliveryAdapters(config.delivery.clients);
+      return output(Object.freeze({ configuredEnabled: config.delivery.enabled, pollMs: config.delivery.pollMs, clients, ...core }), flags.json, command, io);
+    }
+    if (command === "delivery-reconcile") {
+      const { reconcileLocalDelivery } = await import("./broker.mjs");
+      const result = await reconcileLocalDelivery({ root: flags.root, id: positional[0], outcome: flags.outcome, confirm: flags.confirm, reasonCode: flags["reason-code"] });
+      return output(result, flags.json, command, io);
+    }
     if (command === "purge") {
       handle = api.open({ root: flags.root });
       return output(handle.purge({ before: Number(flags.before), ...(flags.dry ? { dry: true } : {}) }), flags.json, command, io);
@@ -281,6 +307,7 @@ function methodArgs(command, positional, flags, envelope) {
     case "get": return [one, flags.data ? { data: true } : {}];
     case "list": return [{ ...pick(flags, ["to", "board", "kind", "state"]), ...(flags.data ? { data: true } : {}) }];
     case "stats": return [];
+    case "pending": return [flags.sid];
     case "audit": return [pick(flags, ["after"])];
     case "snapshot": return [{ ...pick(flags, ["device", "after"]), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }];
     default: throw new CliInputError(`command is not implemented: ${command}`);

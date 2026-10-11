@@ -135,6 +135,29 @@ test("config accepts an explicit local profile and rejects ambiguous bindings", 
   });
 });
 
+test("config v2 freezes delivery selection and leaves v1 delivery disabled", async () => {
+  await withTempDir(async (root) => {
+    const credentialsFile = join(root, "credentials.json");
+    const configFile = join(root, "relay.json");
+    await privateFile(credentialsFile, JSON.stringify({ version: 1, credentials: [] }));
+    const base = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4200 }, tls: null, allowedPeers: [], credentialsFile: "./credentials.json", hub: null, pool: null, views: [] };
+    await privateFile(configFile, JSON.stringify(base));
+    assert.deepEqual((await readConfig(configFile)).delivery, { enabled: false, clients: [], pollMs: 1000 });
+    const v2 = { ...base, version: 2, delivery: { enabled: false, clients: [], pollMs: 1000 } };
+    await privateFile(configFile, JSON.stringify(v2));
+    assert.deepEqual((await readConfig(configFile)).delivery, v2.delivery);
+    v2.delivery.clients = ["hermes"];
+    await privateFile(configFile, JSON.stringify(v2));
+    await assert.rejects(readConfig(configFile), (error) => error instanceof Fault && error.code === "input");
+    v2.delivery = { enabled: true, clients: ["hermes"], pollMs: 250 };
+    await privateFile(configFile, JSON.stringify(v2));
+    assert.equal((await readConfig(configFile)).delivery.enabled, true);
+    v2.role = "hub";
+    await privateFile(configFile, JSON.stringify(v2));
+    await assert.rejects(readConfig(configFile), (error) => error instanceof Fault && error.code === "input");
+  });
+});
+
 test("HTTP clients require an explicit literal loopback mode", async () => {
   await assert.rejects(connect({ url: "http://relay.example", tokenFile: "/missing" }), (error) => error instanceof Fault && error.code === "tls");
   await assert.rejects(connect({ url: "http://user@127.0.0.1", tokenFile: "/missing", mode: "local" }), (error) => error instanceof Fault && error.code === "input");

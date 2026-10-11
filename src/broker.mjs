@@ -7,9 +7,11 @@ import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { Fault } from "./fault.mjs";
-import { openForBroker, dispatchRpc } from "./relay.mjs";
+import { claimDeliveryOwner, openForBroker, dispatchRpc, reconcileDeliveryAttempt, releaseDeliveryOwner } from "./relay.mjs";
 import { createFeed } from "./feed.mjs";
+import { createDeliverySupervisor } from "./delivery.mjs";
 import { createPool } from "./pool.mjs";
+import { migrateDatabase } from "./sqlite.mjs";
 import { connect, createFixedClient, invokeClient } from "./client.mjs";
 import { readConfig, parseJsonStrict } from "./config.mjs";
 import { authenticate, authorize, authorizeBoardRead, loadRegistry, loadRegistrySync } from "./auth.mjs";
@@ -86,6 +88,13 @@ async function acquireLock(root) {
     try { await unlink(path); } catch { throw new Fault("active", "Stale broker lock cannot be removed safely"); }
   }
   throw new Fault("active", "Broker lock changed during acquisition");
+}
+
+async function releaseLock(lock) {
+  const raw = await readFile(lock.path, "utf8");
+  const record = parseJsonStrict(raw, 1024);
+  if (record?.nonce !== lock.nonce) throw new Fault("active", "Broker lock ownership changed during release");
+  await unlink(lock.path);
 }
 
 async function readRequest(req, limit, deadline) {
@@ -173,20 +182,53 @@ const brokers = new WeakMap();
 
 async function closeBroker(broker) {
   const state = brokers.get(broker); if (!state || state.closed) return;
+  const failures = [];
   state.closed = true;
   for (const controller of state.streams) controller.abort();
   state.server.close();
   const stopAt = performance.now() + 10000;
   while (state.inflight && performance.now() < stopAt) await new Promise((resolve) => setTimeout(resolve, 10));
   if (state.inflight) state.server.closeAllConnections();
-  await Promise.allSettled([state.pool?.close(), state.feed?.close()]);
-  if (state.hub) await state.hub.close().catch(() => {});
+  try { await state.delivery?.close(); } catch (error) { failures.push(error); }
+  for (const owned of [state.pool, state.feed, state.hub]) {
+    try { await owned?.close(); } catch (error) { failures.push(error); }
+  }
   await new Promise((resolve) => state.server.close(resolve));
   state.relay.close();
+  try { await releaseLock(state.lock); } catch (error) { failures.push(error); }
+  if (failures.length) throw new Fault("unavailable", "Broker cleanup was incomplete");
+}
+
+export async function migrateLocalStore(options) {
+  if (!object(options) || !["backup,configFile,root,to", "backup,root,to"].includes(Object.keys(options).sort().join(",")) || typeof options.root !== "string" || typeof options.backup !== "string" || ![2, 3].includes(options.to) || options.to === 2 && typeof options.configFile !== "string" || options.to === 3 && options.configFile !== undefined) fail("input", "Migration options are invalid");
+  if (options.to === 2 && (await readConfig(options.configFile)).delivery.enabled) fail("input", "Rollback requires a disabled delivery configuration");
+  const root = resolve(options.root);
+  const lock = await acquireLock(root);
+  let result; let failure;
+  try { result = await migrateDatabase({ root, to: options.to, backup: options.backup, ...(options.to === 2 ? { deliveryEnabled: false } : {}) }); }
+  catch (error) { failure = error; }
+  try { await releaseLock(lock); } catch (error) { failure ??= error; }
+  if (failure) throw failure;
+  return result;
+}
+
+export async function reconcileLocalDelivery(options) {
+  if (!object(options) || Object.keys(options).sort().join(",") !== "confirm,id,outcome,reasonCode,root" || options.confirm !== true || options.reasonCode !== "operator-confirmed" || typeof options.root !== "string" || typeof options.id !== "string" || !["observed", "not-accepted"].includes(options.outcome)) fail("input", "Delivery reconciliation options are invalid");
+  const root = resolve(options.root);
+  const lock = await acquireLock(root);
+  let relay; let ownerGeneration; let result; let failure;
   try {
-    const raw = await readFile(state.lock.path, "utf8"); const record = parseJsonStrict(raw, 1024);
-    if (record?.nonce === state.lock.nonce) await unlink(state.lock.path);
-  } catch { /* Preserve the primary shutdown result; an unmatched lock is operator-owned. */ }
+    relay = openForBroker({ root, role: "host", ownerToken: lock.nonce, reconciliation: true });
+    ownerGeneration = claimDeliveryOwner(relay).generation;
+    result = reconcileDeliveryAttempt(relay, { confirm: true, id: options.id, outcome: options.outcome, ownerGeneration, reasonCode: "operator-confirmed" });
+  } catch (error) { failure = error; }
+  if (relay && ownerGeneration !== undefined) {
+    try { releaseDeliveryOwner(relay, ownerGeneration); } catch (error) { failure ??= error; }
+  }
+  try { relay?.close(); } catch (error) { failure ??= error; }
+  try { await releaseLock(lock); } catch (error) { failure ??= error; }
+  if (failure) throw failure;
+  return result;
 }
 
 export async function serve(options) {
@@ -195,21 +237,30 @@ export async function serve(options) {
   const root = resolve(options.root);
   let registry = await loadRegistry(config.credentialsFile);
   let relay; let lock;
-  let hub = null; let pool = null; let feed = null; let server;
+  let hub = null; let pool = null; let feed = null; let delivery = null; let deliveryOwnerGeneration = null; let server;
   try {
     lock = await acquireLock(root);
-    relay = openForBroker({ root, role: config.role });
+    relay = openForBroker({ root, role: config.role, ownerToken: lock.nonce });
     if (config.hub) hub = await connect({ url: config.hub.url, tokenFile: config.hub.tokenFile, ...(config.hub.caFile ? { caFile: config.hub.caFile } : {}), mode: "tailscale" });
     if (hub && hub.authority === relay.authority) throw new Fault("input", "Hub and host authorities must be distinct");
     feed = createFeed(relay);
     if (config.pool) pool = createPool({ local: relay, hub, ...config.pool });
     server = config.tls ? https.createServer({ cert: await readTlsFile(config.tls.certFile, "TLS certificate", false), key: await readTlsFile(config.tls.keyFile, "TLS private key", true), maxHeaderSize: MAX_HEADERS, minVersion: "TLSv1.2" }) : http.createServer({ maxHeaderSize: MAX_HEADERS, joinDuplicateHeaders: false });
+    if (config.delivery.enabled) {
+      deliveryOwnerGeneration = claimDeliveryOwner(relay).generation;
+      delivery = createDeliverySupervisor({ local: relay, hub, pool, launchConfigured: Boolean(config.pool?.launch), ownerGeneration: deliveryOwnerGeneration, clients: config.delivery.clients, pollMs: config.delivery.pollMs });
+      await delivery.start();
+    }
   } catch (error) {
+    await Promise.allSettled([delivery?.close()]);
+    if (!delivery && relay && deliveryOwnerGeneration !== null) {
+      try { releaseDeliveryOwner(relay, deliveryOwnerGeneration); } catch {}
+    }
     await Promise.allSettled([pool?.close(), feed?.close(), hub?.close()]); relay?.close();
-    if (lock) { try { const r = parseJsonStrict(await readFile(lock.path, "utf8"), 1024); if (r?.nonce === lock.nonce) await unlink(lock.path); } catch {} }
+    if (lock) { try { await releaseLock(lock); } catch {} }
     throw error;
   }
-  const state = { config, root, relay, lock, hub, pool, feed, server, address: null, closed: false, inflight: 0, activeRequests: 0, bodyReads: 0, active: new Map(), rates: new Map(), streams: new Set(), registry };
+  const state = { config, root, relay, lock, hub, pool, feed, delivery, server, address: null, closed: false, inflight: 0, activeRequests: 0, bodyReads: 0, active: new Map(), rates: new Map(), streams: new Set(), registry };
   const broker = Object.create(Broker.prototype); brokers.set(broker, state);
   server.maxRequestsPerSocket = 100;
   server.maxConnections = 40;
