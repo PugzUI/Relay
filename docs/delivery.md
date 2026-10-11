@@ -221,3 +221,9 @@ These references describe candidate upstream APIs, not Relay qualification:
 - [ZCode hooks](https://zcode.z.ai/en/docs/hooks) — lifecycle hook output is context-only and cannot establish idle activation.
 
 The inspected source did not map the exact local `agy` executable/version to an authoritative input API; no adapter claim is made.
+
+## WP4: current native adapter boundary
+
+As of 2026-10-11, no first-party native adapter is implemented or qualified. The Relay broker loads each adapter in its own process with `{client, bind, signal}`; it is not given the runtime's native SDK/plugin context or a native startup event. `bind()` still requires the exact live Relay authority/worker/session/epoch and native runtime/profile/session/lifecycle generation. The current OpenCode and Hermes inputs are in-process runtime APIs, so the broker cannot safely call them as external-session adapters or infer those identities.
+
+No callback stub or second configuration path was added. A selected client without a concrete adapter remains `unsupported` in delivery status, with all adapter capabilities false; its messages remain in the authoritative Relay queue. The exact per-client API, version, capability, and smallest required owner authorization/access are recorded in [delivery blockers](delivery-blockers.json). These blockers do not pass D02, D03, D04, or D25, and the ten-client required support set remains unchanged.

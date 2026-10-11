@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "capturedOn": "2026-10-11",
+  "supportSet": [
+    "codex",
+    "cursor",
+    "zcode",
+    "antigravity",
+    "omp",
+    "kilo",
+    "cline",
+    "hermes",
+    "zed",
+    "opencode"
+  ],
+  "implementedAdapters": [],
+  "qualifiedAdapters": [],
+  "nativeQualification": "pending",
+  "relayAdapterBoundary": {
+    "invocation": "The Relay broker calls startDeliveryAdapter({client, bind, signal}) in the broker process.",
+    "nativeRuntimeContextProvided": false,
+    "bindingRequired": [
+      "authority",
+      "worker",
+      "sid",
+      "epoch",
+      "target.runtimeInstance",
+      "target.profile",
+      "target.nativeSession",
+      "target.lifecycleGeneration",
+      "capabilities",
+      "consumer"
+    ],
+    "finding": "The adapter entrypoint receives no native SDK/plugin context or startup event from which to establish an exact current native target. OpenCode and Hermes expose relevant APIs inside their own runtime/plugin process; no supported exact-existing-session external API is established by the inspected inventory.",
+    "smallestRequiredAuthorization": "Authorize a Relay-owned native startup bridge at the owning runtime integration, or provide a supported fixed-destination API to the exact existing session. The bridge must pass a current native identity and the already-authorized Relay authority/worker/session/epoch into the existing bind callback. Do not add a parallel configuration system, start a new conversation, or change host configuration without that authorization."
+  },
+  "runtimeVersions": {
+    "codex": "codex-cli 0.162.1 (observed)",
+    "cursor": "3.24.12 (observed)",
+    "zcode": "unknown; bounded --version probe timed out",
+    "antigravity": "unknown in this stage's retained evidence",
+    "omp": "unknown in this stage's retained evidence",
+    "kilo": "7.8.8 (WP1 inventory)",
+    "cline": "3.0.70 (WP1 inventory)",
+    "hermes": "2026.9.24 (observed)",
+    "zed": "unknown in this stage's retained evidence",
+    "opencode": "v2.0.26 (observed)"
+  },
+  "clients": [
+    {
+      "id": "codex",
+      "surface": "Managed hooks and Codex App Server candidate",
+      "relayContext": "unqualified",
+      "relayIdle": "unsupported",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "App-server thread resume/turn operations do not establish control of an already-running Codex CLI session. The exact busy, idempotency, refusal, and status path for that session is not established.",
+      "smallestNextStep": "Provide an owner-approved native bridge to the exact existing CLI session and a supported safe-busy/idempotency/status contract, or an authoritative API proving the same behavior."
+    },
+    {
+      "id": "cursor",
+      "surface": "Managed hooks and Cursor Agent SDK",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The SDK's resumable-agent and cloud run APIs are not wired to the managed bridge. Cloud busy behavior rejects rather than queues; safe local busy delivery to the exact running UI/CLI session is unqualified.",
+      "smallestNextStep": "Provide a native bridge for the exact local session and version-matched safe busy/refusal/status/idempotency semantics."
+    },
+    {
+      "id": "zcode",
+      "surface": "SessionStart and UserPromptSubmit hooks",
+      "relayContext": "unqualified",
+      "relayIdle": "unsupported",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The inspected hook surface is context-only and cannot start an idle turn. Exact runtime version, existing-session input, safe busy behavior, idempotency, and status remain unknown; the bounded version probe timed out.",
+      "smallestNextStep": "Provide the exact runtime version and an authoritative API that safely submits to the same existing idle session and queues at a safe busy boundary."
+    },
+    {
+      "id": "antigravity",
+      "surface": "agy executable and managed PreInvocation declaration",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The exact agy-version-to-hook contract and consumed return envelope are not verified. No exact-session input, safe busy queue, refusal/status, or idempotency API is selected.",
+      "smallestNextStep": "Provide the version-matched agy native consumer contract and an owner-approved bridge for the current existing session."
+    },
+    {
+      "id": "omp",
+      "surface": "In-process OMP session API and managed lifecycle extension",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The in-process followUp path is a candidate for a busy turn and session/turn events are available, but durable request idempotency is undocumented and no Relay consumer is wired.",
+      "smallestNextStep": "Provide an owner-approved in-process bridge and a durable deduplication or observation/reconciliation contract for the exact OMP session."
+    },
+    {
+      "id": "kilo",
+      "surface": "Kilo v2 session inbox/prompt API candidate",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The candidate v2 API accepts a caller message ID and returns admission, but is not matched to the inspected CLI 7.8.8. Inbox/steering bounds, provider timeout, safe busy behavior, and status/refusal remain unresolved.",
+      "smallestNextStep": "Provide a version-matched API contract with bounded queue/provider behavior and a current status/refusal path for the exact existing session."
+    },
+    {
+      "id": "cline",
+      "surface": "TaskStart/UserPromptSubmit hook envelope and ClineCore candidate API",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "Hooks can contribute context at their callback boundary. ClineCore send/status/events are in-process APIs not tied to the inspected CLI 3.0.70; safe busy queuing and idempotent retry are unestablished.",
+      "smallestNextStep": "Provide an owner-approved bridge to the version-matched Cline runtime and verified busy, refusal, status, and idempotency semantics."
+    },
+    {
+      "id": "hermes",
+      "surface": "Hermes PluginContext.inject_message on an exact native session key",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "Hermes 2026.9.24 exposes permission-gated plugin injection; a true result means scheduling acceptance, not observed context or turn, and no idempotency/completion receipt is provided. TUI/desktop/gateway have safe queued busy paths; the classic CLI busy path can interrupt and is not usable for unattended delivery. Relay does not own the plugin permission/configuration.",
+      "smallestNextStep": "Authorize a native plugin bridge on an explicitly supported non-classic-CLI surface, grant only its required profile permission, and pass the exact current native identity plus existing Relay session/epoch."
+    },
+    {
+      "id": "zed",
+      "surface": "Managed policy and Zed ACP client",
+      "relayContext": "unsupported",
+      "relayIdle": "unsupported",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "The managed path has no external input consumer for a Zed-owned active session. ACP session/prompt targets the ACP child agent, not the existing Zed-owned assistant session.",
+      "smallestNextStep": "Provide a Zed-owned input/lifecycle API for the exact already-running assistant session; ACP child launch is not a substitute."
+    },
+    {
+      "id": "opencode",
+      "surface": "OpenCode v2 PluginContext/client session API",
+      "relayContext": "unqualified",
+      "relayIdle": "unqualified",
+      "launch": "not an adapter capability; existing local Pool/prime only",
+      "apiFinding": "OpenCode v2.0.26 exposes in-process exact-session prompt submission with explicit queue delivery and a caller-supplied admission ID, plus session events. The admission is not context/turn observation. Relay's broker adapter call has no PluginContext/client or native startup identity, and the managed bridge does not submit Relay notices.",
+      "smallestNextStep": "Authorize the owning native plugin bridge to load the Relay entrypoint and supply the current PluginContext, exact native lifecycle identity, and already-authorized Relay session/epoch."
+    }
+  ]
+}
