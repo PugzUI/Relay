@@ -390,6 +390,10 @@ export function createDeliverySupervisor(options) {
         }
         return result;
       },
+      hold: () => {
+        if (!current(handleBinding) || admitted || completed) return false;
+        return transition(attempt, "submitting", "held", refsFor(binding.targetDigest), { reasonCode: "native-held" });
+      },
       refuse: (reasonCode = "native-refused") => {
         if (!current(handleBinding) || admitted || completed) return false;
         if (!REASONS.has(reasonCode)) throw new Fault("input", "Delivery reason code is invalid");
@@ -484,7 +488,8 @@ export function createDeliverySupervisor(options) {
       const result = validateNativeResult(await invokeNative(binding, target.consumer.submit, { attemptId: ticket.attemptId, notice: ticket.notice }));
       if (!current(binding)) return;
       if (result.accepted) ticket.admitted(result.nativeRequestId);
-      else ticket.refuse(result.state === "held" ? "native-held" : "native-refused");
+      else if (result.state === "held") ticket.hold();
+      else ticket.refuse();
     } catch (error) {
       if (!current(binding)) return;
       if (ticket) {

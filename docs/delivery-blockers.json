@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedOn": "2026-10-11",
+  "capturedOn": "2026-10-12",
   "supportSet": [
     "codex",
     "cursor",
@@ -18,6 +18,25 @@
   ],
   "qualifiedAdapters": [],
   "nativeQualification": "pending",
+  "nativeSmoke": {
+    "client": "opencode",
+    "runtimeVersion": "v2.0.26",
+    "surface": "isolated temporary HOME/profile, documented OpenCode session API, Relay-owned plugin, private Unix-socket bridge",
+    "observed": [
+      "Created disposable empty project-scoped sessions with POST /api/session and verified they had no messages.",
+      "The real plugin called session.get for its exact configured session and registered through the bridge.",
+      "The plugin read fresh session.wait state idle for the exact configured session."
+    ],
+    "notObserved": [
+      "The bridge bind callback was a test callback, not the live Relay supervisor/store.",
+      "No session.prompt, provider call, native context observation, turn start, or safe-idle-after-turn was exercised.",
+      "Native refusal and restart recovery were not exercised."
+    ],
+    "cleanup": [
+      "Both disposable sessions were deleted and read back absent.",
+      "The isolated OpenCode server and bridge processes were stopped."
+    ]
+  },
   "relayAdapterBoundary": {
     "invocation": "The Relay broker calls startDeliveryAdapter({client, bind, signal, root, onEvidence}) in the broker process; the OpenCode plugin connects over an authenticated private Unix socket.",
     "nativeRuntimeContextProvided": false,
@@ -34,19 +53,19 @@
       "capabilities",
       "consumer"
     ],
-    "finding": "The broker intentionally receives no native SDK/plugin context. The Relay-owned OpenCode plugin runs inside its v2 PluginContext and hands exact session/profile/lifecycle identity plus explicit Relay authority/worker/session/epoch bindings to the existing bind callback through the owner-only local bridge. Other clients remain unimplemented.",
-    "smallestRequiredAuthorization": "OpenCode host deployment remains owner-controlled: enable the exported plugin on the supported v2 runtime and grant no broader permission than its exact-session API requires. Supply an explicit existing Relay recipient mapping in plugin options. Do not modify host configuration or activate a native session as part of this implementation stage."
+    "finding": "The broker intentionally receives no native SDK/plugin context. The Relay-owned OpenCode plugin runs inside its v2 PluginContext and hands exact session/profile/lifecycle identity plus explicit Relay authority/worker/session/epoch bindings through the private bridge to the existing bind callback. The native smoke used a test bind callback and did not verify live Relay persistence. Other clients remain unimplemented.",
+    "smallestRequiredAuthorization": "OpenCode deployment remains owner-controlled: enable the exported plugin only in an approved isolated profile, grant only explicitly approved native permissions, and supply an explicit existing Relay recipient mapping in plugin options. This stage made no host configuration or permission changes."
   },
   "runtimeVersions": {
     "codex": "codex-cli 0.162.1 (observed)",
-    "cursor": "3.24.12 (observed)",
+    "cursor": "Agent CLI 2026.10.01 (WP1); 3.24.12 is a separately observed Cursor component/surface, not the Agent CLI version",
     "zcode": "unknown; bounded --version probe timed out",
-    "antigravity": "unknown in this stage's retained evidence",
-    "omp": "unknown in this stage's retained evidence",
+    "antigravity": "agy 1.3.3 observed; exact managed-product/API mapping unverified",
+    "omp": "18.8.7 (WP1 inventory)",
     "kilo": "7.8.8 (WP1 inventory)",
     "cline": "3.0.70 (WP1 inventory)",
     "hermes": "2026.9.24 (observed)",
-    "zed": "unknown in this stage's retained evidence",
+    "zed": "1.23.2 (WP1 inventory)",
     "opencode": "v2.0.26 (observed)"
   },
   "clients": [
@@ -65,8 +84,8 @@
       "relayContext": "unqualified",
       "relayIdle": "unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "The SDK's resumable-agent and cloud run APIs are not wired to the managed bridge. Cloud busy behavior rejects rather than queues; safe local busy delivery to the exact running UI/CLI session is unqualified.",
-      "smallestNextStep": "Provide a native bridge for the exact local session and version-matched safe busy/refusal/status/idempotency semantics."
+      "apiFinding": "Cursor Agent CLI 2026.10.01 is the WP1 observed surface; 3.24.12 is a separate Cursor component and must not be conflated with it. The managed hooks are context-only. Agent SDK resume/status is not mapped to the exact running UI/CLI session. Cloud busy rejects rather than queues; local agents do not raise AgentBusyError, and local.force expires a stuck run rather than providing safe busy delivery.",
+      "smallestNextStep": "Provide an exact-session bridge plus version-matched current status, refusal, safe-boundary, and request-identity semantics for the installed Agent CLI."
     },
     {
       "id": "zcode",
@@ -83,7 +102,7 @@
       "relayContext": "unqualified",
       "relayIdle": "unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "The exact agy-version-to-hook contract and consumed return envelope are not verified. No exact-session input, safe busy queue, refusal/status, or idempotency API is selected.",
+      "apiFinding": "agy 1.3.3 was observed, but the mapping from that executable/version to the managed PreInvocation hook and consumed return envelope is unverified. No exact-session input, safe busy queue, refusal/status, or idempotency API is selected.",
       "smallestNextStep": "Provide the version-matched agy native consumer contract and an owner-approved bridge for the current existing session."
     },
     {
@@ -92,8 +111,8 @@
       "relayContext": "unqualified",
       "relayIdle": "unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "The in-process followUp path is a candidate for a busy turn and session/turn events are available, but durable request idempotency is undocumented and no Relay consumer is wired.",
-      "smallestNextStep": "Provide an owner-approved in-process bridge and a durable deduplication or observation/reconciliation contract for the exact OMP session."
+      "apiFinding": "OMP 18.8.7's public SDK is an in-process embedder, not a verified external attach path to the installed CLI. followUp and session/turn events remain candidates inside the owning runtime; durable request idempotency is undocumented and no Relay consumer is wired.",
+      "smallestNextStep": "Provide an owner-approved entrypoint inside the exact live OMP session with bounded input/status/event behavior and durable request identity or safe observation/reconciliation semantics."
     },
     {
       "id": "kilo",
@@ -101,8 +120,8 @@
       "relayContext": "unqualified",
       "relayIdle": "unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "The candidate v2 API accepts a caller message ID and returns admission, but is not matched to the inspected CLI 7.8.8. Inbox/steering bounds, provider timeout, safe busy behavior, and status/refusal remain unresolved.",
-      "smallestNextStep": "Provide a version-matched API contract with bounded queue/provider behavior and a current status/refusal path for the exact existing session."
+      "apiFinding": "The candidate v2 API is not matched to CLI 7.8.8. Replaying the same message ID returns the original admission but schedules another wake unless resume:false, which admits only; sessions.active() is process-local and resets on restart. Backlog/steering bounds, provider timeouts, current status/refusal, and safe busy behavior remain unresolved.",
+      "smallestNextStep": "Provide a version-matched exact-session API with bounded queue/provider behavior, no unsafe duplicate wake on retry, and current status/refusal/observation semantics."
     },
     {
       "id": "cline",
@@ -115,12 +134,12 @@
     },
     {
       "id": "hermes",
-      "surface": "Hermes PluginContext.inject_message on an exact native session key",
+      "surface": "Hermes 2026.9.24 in-process Python PluginContext.inject_message on an exact native session key",
       "relayContext": "unqualified",
       "relayIdle": "unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
-      "apiFinding": "Hermes 2026.9.24 exposes permission-gated plugin injection; a true result means scheduling acceptance, not observed context or turn, and no idempotency/completion receipt is provided. TUI/desktop/gateway have safe queued busy paths; the classic CLI busy path can interrupt and is not usable for unattended delivery. Relay does not own the plugin permission/configuration.",
-      "smallestNextStep": "Authorize a native plugin bridge on an explicitly supported non-classic-CLI surface, grant only its required profile permission, and pass the exact current native identity plus existing Relay session/epoch."
+      "apiFinding": "inject_message is callable only inside PluginContext and returns a boolean scheduling result, not an attempt-correlated receipt. Gateway injection requires allow_gateway_injection. The inspected surface lacks caller-keyed idempotency, fresh exact-session status, and correlated context/turn observation; a generic bridge cannot supply these native guarantees. The classic CLI busy path can interrupt and is not suitable for unattended delivery.",
+      "smallestNextStep": "An explicitly supported native surface must provide caller-keyed idempotent enqueue plus fresh exact-session status and correlated context/turn observation. Any plugin installation or permission grant remains separately owner-authorized."
     },
     {
       "id": "zed",
@@ -139,8 +158,8 @@
       "launch": "not an adapter capability; existing local Pool/prime only",
       "pluginEntryPoint": "@pugzui/relay/opencode-plugin",
       "runtimeVersion": "v2.0.26 (pinned implementation surface)",
-      "apiFinding": "The packaged plugin implementation checks the configured exact session through PluginContext, uses session.prompt with queue delivery and a stable caller-supplied ID, and separately observes context, model-request, and safe-idle events. Its Relay bindings share one consumer and stable profile/session target gate across local and hub authorities. Bridge/plugin fixtures verify mechanics only. An isolated v2.0.26 serve under a temporary HOME had no disposable session available; no native plugin bind, prompt, or provider call was performed.",
-      "smallestNextStep": "For WP5b, provide an already-created disposable OpenCode session in an isolated profile, or explicitly authorize a supported no-provider session-creation path. Then enable the exported plugin only in that profile, supply its explicit existing Relay mapping, and perform the separately authorized context/turn/idle/refusal/restart qualification. Do not use a real user session or infer qualification from admission or fixtures."
+      "apiFinding": "The packaged plugin implementation checks the configured exact session through PluginContext, uses session.prompt with queue delivery and a stable caller-supplied ID, and separately observes context, model-request, and safe-idle events. Its Relay bindings share one consumer and stable profile/session target gate across local and hub authorities. The v2.0.26 native smoke verified exact session.get, plugin-to-bridge registration, and fresh session.wait idle in an isolated disposable session, but used a test bind callback; no live Relay supervisor/store binding, prompt, provider call, context, turn, or safe-idle-after-turn was observed.",
+      "smallestNextStep": "In an approved isolated profile, verify the plugin against the live Relay supervisor/store using an explicit existing Relay mapping, then separately qualify native context, turn, safe-idle-after-turn, refusal, and restart recovery without using a real user session or provider spend. Host deployment and permissions remain owner-controlled."
     }
   ]
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDeliveryAdapter } from "../src/adapters/opencode.mjs";
@@ -47,7 +48,7 @@ async function waitFor(predicate) {
   assert.fail("Timed out waiting for the native observation");
 }
 
-test("OpenCode bridge shares local/hub bindings and observes admission, context, turn, and safe idle", async (t) => {
+test("OpenCode bridge authenticates, shares local/hub bindings, and observes admission, context, turn, and safe idle", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "relay-opencode-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const evidence = [];
@@ -73,6 +74,20 @@ test("OpenCode bridge shares local/hub bindings and observes admission, context,
   t.after(() => adapter.close());
   assert.equal(statSync(join(root, "opencode-delivery.token")).mode & 0o077, 0);
   assert.equal(statSync(join(root, "opencode-delivery.sock")).mode & 0o077, 0);
+  const unauthorizedStatus = await new Promise((resolve, reject) => {
+    const request = httpRequest({
+      socketPath: join(root, "opencode-delivery.sock"),
+      method: "POST",
+      path: "/v1/call",
+      headers: { authorization: `Relay ${"0".repeat(64)}`, "content-type": "application/json", "content-length": "2" },
+    }, (response) => {
+      response.resume();
+      resolve(response.statusCode);
+    });
+    request.once("error", reject);
+    request.end("{}");
+  });
+  assert.equal(unauthorizedStatus, 401);
 
   const hooks = new Map();
   const prompts = [];

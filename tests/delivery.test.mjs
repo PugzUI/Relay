@@ -144,6 +144,35 @@ test("supervisor coalesces local and hub scopes into one target-gated activation
   await supervisor.close();
 });
 
+test("native hold keeps the target gate while refusal releases it without consuming pending state", async (t) => {
+  for (const response of [{ state: "held", reasonCode: "native-held", locked: 1 }, { state: "refused", reasonCode: "native-refused", locked: 0 }]) {
+    const { localRoot } = ownedRoots(t);
+    setup({ root: localRoot, device: "local", role: "host" });
+    const local = openForBroker({ root: localRoot, role: "host", ownerToken: "R".repeat(32) });
+    t.after(() => local.close());
+    const generation = claimDeliveryOwner(local);
+    const consumer = {
+      status: async () => ({ state: "idle" }),
+      submit: async () => ({ accepted: false, state: response.state }),
+      observe: async () => ({ state: "unknown" }),
+    };
+    const target = { runtimeInstance: `runtime-${response.state}`, profile: "default", nativeSession: `native-${response.state}`, lifecycleGeneration: `life-${response.state}` };
+    const binding = bindingInput(local, target, consumer);
+    const supervisor = createDeliverySupervisor({ local, hub: null, pool: null, launchConfigured: false, ownerGeneration: generation.generation, clients: ["hermes"], pollMs: 250 });
+    t.after(() => supervisor.close());
+    await supervisor.start();
+    await supervisor.bind(binding.input);
+    await supervisor.refresh();
+
+    const [attempt] = listDeliveryAttempts(local, generation.generation);
+    assert.equal(attempt.state, response.state);
+    assert.equal(attempt.reasonCode, response.reasonCode);
+    assert.equal(deliveryStatus(local).targets.locked, response.locked);
+    assert.deepEqual(local.pending(binding.session.id).pending, { msg: 1, work: 0 });
+    await supervisor.close();
+  }
+});
+
 test("configured hub Client summaries are read remotely and stored only in the local delivery ledger", async (t) => {
   const roots = ownedRoots(t);
   setup({ root: roots.localRoot, device: "local", role: "host" });
