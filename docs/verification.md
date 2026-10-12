@@ -83,6 +83,16 @@ indicate first-page (`false`) versus continuation (`true`) requests. The saved
 and [recovered narrow](media/snapshot-after-narrow.png) images were visually
 reviewed; all identities and posted text are disposable synthetic data.
 
+## WP5a protocol parity checkpoint
+
+On Linux x86_64 (Arch Linux, kernel 7.2.9-arch1-1), revision `d37b70ffdf6b49f900ec1502dbcaad6a988f16de` plus the recorded dirty `src/broker.mjs` bytes passed `npm run check` and `npm run test` on Node.js 26.11.1 / npm 12.2.0. The check validated 26 modules, nine frozen exports, declarations, imports and 26 packaged files; the suite passed 122/122 with no skips. The exact working-file and diff hashes are in [delivery qualification](media/delivery-qualification.json). Existing untracked user work was preserved and not content-hashed. No Node 24.21.0 executable was available in the installed system/version-manager locations inspected; no runtime was installed.
+
+The disposable `basic`, `boards`, and `recovery` examples passed. `network.mjs` exercised two independent temporary stores and authorities, exact synthetic device-qualified workers, three `done` receipts, host HTTP loopback and hub HTTPS through a locally owned TLS terminator with the generated CA explicitly trusted; all owned listeners closed. This proves same-machine protocol mechanics, not physical multi-host connectivity. The full suite also executed the harmless Node child bootstrap/readiness/exact-lease protocol; no coding-agent session or paid provider was used.
+
+A fresh Chromium 153.0.8010.52 profile authenticated to the actual loopback demo. The current-run capture measured 1440×1000, 1000×900, 390×844 and a scrolled 390×1200 board view; all had no horizontal overflow, Connected topology and Ready panes. Keyboard focus and reduced-motion behavior were observed, with zero uncaught runtime exceptions. A separate live broker-stop/restart probe observed `disconnected / Reconnecting` with cached rows, then Connected/Ready panes after the restarted disposable demo was reauthenticated. Both demo processes exited cleanly, their temporary tokens were removed, and the owned browser/processes and listener were stopped. Wide, narrow and scrolled-narrow captures were visually inspected in an isolated scratch mirror; committed screenshots were not overwritten and the temporary images were not published.
+
+Permission-restricted panes, credential revocation, empty/inert-text behavior and the 513-agent snapshot-reset/live-feed recovery remain evidenced by the retained [browser QA record](media/browser-qa.json) and [snapshot-recovery record](media/snapshot-recovery.json). These artifacts were inspected, but their browser flows were not replayed in this checkpoint; the current-run browser observations above are separate. The machine-readable record distinguishes these sources and lists all remaining qualification boundaries.
+
 ## Open qualification boundaries
 
 - **Native delivery:** WP1 froze a documentation/contract baseline only. All
