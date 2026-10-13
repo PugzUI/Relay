@@ -133,12 +133,16 @@ function getSession(db, sid, now, { live = true, principal = undefined } = {}) {
   if (live && now >= session.until) throw new Fault("expired", "Session has expired", { sid });
   return session;
 }
-function expireWorker(db, worker, now) {
-  const leases = db.prepare("SELECT l.id,l.mid FROM leases l JOIN messages m ON m.id=l.mid JOIN sessions s ON s.id=l.sid WHERE m.state='claimed' AND l.state='live' AND l.until<=? AND s.worker=?").all(now, worker);
-  for (const lease of leases) {
-    db.prepare("UPDATE leases SET state='expired' WHERE id=? AND state='live'").run(lease.id);
-    db.prepare("UPDATE messages SET state='pending' WHERE id=? AND state='claimed'").run(lease.mid);
-  }
+// Claim expiry is an authority property, not a side effect of the owning worker's
+// next call. Every mutation path that can observe time running out requeues every
+// time-expired live claim store-wide, so work abandoned by a departed worker
+// returns to `pending` and becomes claimable by any other worker or the Pool.
+// Requeueing the message before retiring its lease keeps exactly one live attempt
+// per claimed row and never touches a claim that is still inside its lifetime.
+function expireClaims(db, now) {
+  const requeued = db.prepare("UPDATE messages SET state='pending' WHERE state='claimed' AND id IN (SELECT l.mid FROM leases l WHERE l.state='live' AND l.until<=?)").run(now);
+  db.prepare("UPDATE leases SET state='expired' WHERE state='live' AND until<=?").run(now);
+  return Number(requeued.changes);
 }
 function insertAudit(db, now, row) {
   const encoded = Buffer.byteLength(JSON.stringify([now, row.type, row.worker ?? null, row.sid ?? null, row.mid ?? null, row.lease ?? null, row.code ?? null, row.from ?? null, row.to ?? null, row.state ?? null]));
@@ -237,7 +241,7 @@ export class Relay {
     return tx(this, "write", ({ db, now }) => {
       const agent = db.prepare("SELECT * FROM agents WHERE id=?").get(worker);
       if (!agent) throw new Fault("target", "Worker is not registered");
-      expireWorker(db, worker, now);
+      expireClaims(db, now);
       const active = db.prepare("SELECT * FROM sessions WHERE worker=? AND epoch=? AND ended IS NULL AND until>? ORDER BY init DESC LIMIT 1").get(worker, agent.epoch, now);
       if (active && !options.replace) throw new Fault("active", "Worker already has a live session", { sid: active.id });
       if (active) {
@@ -258,7 +262,7 @@ export class Relay {
       const row = db.prepare("SELECT s.*,a.epoch AS current_epoch FROM sessions s JOIN agents a ON a.id=s.worker WHERE s.id=?").get(sid);
       if (!row || row.ended !== null || row.epoch !== row.current_epoch) throw new Fault("session", "Session cannot be resumed", { sid });
       if (now > row.until + LIMITS.resumeMs) throw new Fault("expired", "Session recovery window has expired", { sid });
-      expireWorker(db, row.worker, now);
+      expireClaims(db, now);
       const until = now + this._store.policy.sessionMs;
       db.prepare("UPDATE sessions SET until=? WHERE id=?").run(until, sid);
       return { id: sid, worker: row.worker, epoch: row.epoch, until, ended: null };
@@ -344,7 +348,7 @@ export class Relay {
         if (board.kind === "host" && (board.device !== readMeta(db, "device").id || board.device !== agent.device)) throw new Fault("denied", "Host board belongs to another device");
         if (board.kind === "bounty" && readMeta(db, "role") !== "hub") throw new Fault("board", "Bounty board is not local");
       }
-      expireWorker(db, session.worker, now);
+      expireClaims(db, now);
       const candidates = options.board
         ? db.prepare("SELECT * FROM messages WHERE board=? AND kind='work' AND state='pending' ORDER BY seq").all(options.board)
         : db.prepare("SELECT * FROM messages WHERE recipient=? AND state='pending' AND (? IS NULL OR kind=?) ORDER BY seq").all(session.worker, options.kind ?? null, options.kind ?? null);
@@ -373,10 +377,11 @@ export class Relay {
   touch(sid, leaseId) {
     const result = tx(this, "write", ({ db, now }) => {
       const session = getSession(db, sid, now, { live: false });
-      if (now >= session.until) { expireWorker(db, session.worker, now); return { fault: "session" }; }
+      if (now >= session.until) { expireClaims(db, now); return { fault: "session" }; }
       const lease = db.prepare("SELECT l.*,m.state AS message_state,m.kind,m.data FROM leases l JOIN messages m ON m.id=l.mid WHERE l.id=?").get(leaseId);
       if (!lease || lease.sid !== sid || lease.epoch !== session.epoch || lease.state !== "live" || lease.message_state !== "claimed") throw new Fault("lease", "Lease is not current", { lease: leaseId });
       if (now >= lease.until) { this.#expireLease(db, lease); return { fault: "lease" }; }
+      expireClaims(db, now);
       const until = Math.min(now + this._store.policy.claimMs, session.until);
       db.prepare("UPDATE leases SET until=? WHERE id=?").run(until, leaseId);
       return { id: leaseId, mid: lease.mid, sid, epoch: lease.epoch, until, attempt: lease.attempt, kind: lease.kind, ...safeJson(lease.data) };
@@ -394,7 +399,7 @@ export class Relay {
     if (!["done", "failed", "rejected"].includes(outcome)) throw new Fault("input", "Invalid acknowledgement outcome");
     const result = tx(this, "write", ({ db, now }) => {
       const session = getSession(db, sid, now, { live: false });
-      if (now >= session.until) { expireWorker(db, session.worker, now); return { fault: "session" }; }
+      if (now >= session.until) { expireClaims(db, now); return { fault: "session" }; }
       const prior = db.prepare("SELECT * FROM receipts WHERE lease=?").get(leaseId);
       if (prior && prior.sid === sid && prior.epoch === session.epoch) {
         if (prior.outcome !== outcome) throw new Fault("ack_conflict", "Lease was acknowledged differently", { mid: prior.mid });
@@ -403,6 +408,7 @@ export class Relay {
       const lease = db.prepare("SELECT l.*,m.state AS message_state,m.recipient FROM leases l JOIN messages m ON m.id=l.mid WHERE l.id=?").get(leaseId);
       if (!lease || lease.sid !== sid || lease.epoch !== session.epoch || lease.state !== "live" || lease.message_state !== "claimed") throw new Fault("lease", "Lease is not current", { lease: leaseId });
       if (now >= lease.until) { this.#expireLease(db, lease); return { fault: "lease" }; }
+      expireClaims(db, now);
       db.prepare("UPDATE leases SET state=? WHERE id=?").run(outcome, leaseId);
       db.prepare("UPDATE messages SET state=?,acked=? WHERE id=?").run(outcome, now, lease.mid);
       db.prepare("INSERT INTO receipts(mid,lease,sid,epoch,outcome,time) VALUES(?,?,?,?,?,?)").run(lease.mid, leaseId, sid, session.epoch, outcome, now);
@@ -416,10 +422,11 @@ export class Relay {
   release(sid, leaseId) {
     const result = tx(this, "write", ({ db, now }) => {
       const session = getSession(db, sid, now, { live: false });
-      if (now >= session.until) { expireWorker(db, session.worker, now); return { fault: "session" }; }
+      if (now >= session.until) { expireClaims(db, now); return { fault: "session" }; }
       const lease = db.prepare("SELECT l.*,m.state AS message_state,m.recipient,m.sender FROM leases l JOIN messages m ON m.id=l.mid WHERE l.id=?").get(leaseId);
       if (!lease || lease.sid !== sid || lease.epoch !== session.epoch || lease.state !== "live" || lease.message_state !== "claimed") throw new Fault("lease", "Lease is not current", { lease: leaseId });
       if (now >= lease.until) { this.#expireLease(db, lease); return { fault: "lease" }; }
+      expireClaims(db, now);
       db.prepare("UPDATE leases SET state='released' WHERE id=?").run(leaseId);
       db.prepare("UPDATE messages SET state='pending' WHERE id=?").run(lease.mid);
       insertAudit(db, now, { type: "release", worker: session.worker, sid, mid: lease.mid, lease: leaseId, from: lease.sender, to: lease.recipient, state: "pending" });
