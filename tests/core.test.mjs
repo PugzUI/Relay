@@ -103,6 +103,30 @@ test("A10 expiry at until commits reclaim before returning the fault", (t) => {
   } finally { Date.now = wall; }
 });
 
+test("A05/A52 an abandoned claim is requeued by the authority, not only by its owner", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "requeue", sessionMs: 60000, claimMs: 1000 }); t.after(() => relay.close());
+  const owner = relay.register("worker", { slot: "001" });
+  const other = relay.register("worker", { slot: "002" });
+  const ownerSession = relay.join(owner.id); const otherSession = relay.join(other.id);
+  const board = `host:${relay.device.id}`;
+  const addressed = relay.send(ownerSession.id, owner.id, { work: { task: "addressed" } });
+  const posted = relay.post(ownerSession.id, board, { work: { task: "board" } });
+  const addressedLease = relay.claim(ownerSession.id);
+  const boardLease = relay.claim(ownerSession.id, { board });
+  assert.equal(addressedLease.mid, addressed.id); assert.equal(boardLease.mid, posted.id);
+  assert.equal(relay.stats().messages.claimed, 2);
+  const wall = Date.now;
+  try {
+    Date.now = () => boardLease.until;
+    // The other worker owns no claim here; its mutation is what returns both
+    // abandoned rows to the queue instead of leaving them charged as claimed.
+    assert.equal(relay.claim(otherSession.id), null);
+    assert.equal(relay.stats().messages.claimed, 0); assert.equal(relay.stats().messages.pending, 2);
+    assert.equal(relay.list({ to: owner.id }).items[0].state, "pending");
+    assert.equal(relay.list({ board, kind: "work" }).items[0].state, "pending");
+  } finally { Date.now = wall; }
+});
+
 test("A15/A52 purge protects retained replay references and removes eligible terminal history", (t) => {
   const relay = open({ root: temporaryRoot(t), device: "purge" }); t.after(() => relay.close());
   const worker = relay.register("worker"); const session = relay.join(worker.id);
