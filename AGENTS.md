@@ -2,6 +2,13 @@
 
 Relay is the standalone project at `PugzUI/Relay`. Read the supplied PRD and the frozen implementation contract before coding.
 
+## Product scope
+
+- Relay must work independently for users outside this environment. Executor, MCP, the private agent framework, and AI Intercom are not runtime dependencies or release prerequisites.
+- Replacing AI Intercom is a later, separately scoped migration. Do not integrate Relay into that stack or disable the installed Intercom while delivering this product.
+- Prioritize real message/work delivery, native agent integration, failure handling, and direct end-to-end verification. A populated interface or synthetic worker receipt does not prove native agent delivery.
+- User-facing demos, screenshot galleries, and showcase work are deferred until the product works. Keep disposable verification fixtures under `tests/`, outside the public commands and package. Do not present fixtures as product readiness.
+
 ## Delivery authority
 
 The owner requested the complete project and explicitly authorized all project choices through readiness and push to `main`. Project-scoped automated tests, isolated local HTTP/HTTPS/process/browser verification, commits and publication to `PugzUI/Relay` are authorized. Do not change host services, firewall/Tailscale policy, installed agent configuration, other repositories, or production data. Never expose credentials or real agent sessions.

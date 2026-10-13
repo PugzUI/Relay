@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { captureEnvironment, capturePageState, captureUrl, pngDimensions, readCaptureToken } from "../scripts/capture.mjs";
+import { captureEnvironment, capturePageState, captureUrl, pngDimensions, readCaptureToken } from "./fixtures/ui/capture.mjs";
 
 test("capture URL accepts only loopback origins", () => {
   assert.equal(captureUrl("http://127.0.0.1:4200"), "http://127.0.0.1:4200");

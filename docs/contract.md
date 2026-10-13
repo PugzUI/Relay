@@ -17,6 +17,10 @@ owners and updated here before implementation diverges.
   modules, SVG, and CSS.
 - Public spelling is `Relay`. `init` always means immutable record creation
   time in UTC epoch milliseconds.
+- Relay is standalone. Executor, MCP, the private framework, and AI Intercom
+  are not runtime dependencies or release prerequisites. A later Intercom
+  replacement is separately scoped. Public demos are deferred until real
+  product behavior is qualified; isolated fixtures are verification only.
 - Public runtime exports are exactly `Fault`, `Relay`, `open`, `setup`,
   `Broker`, `serve`, `Client`, `connect`, and `LIMITS`. Public declarations
   also export the types in `src/index.d.ts`. Internal seams below are not
@@ -84,7 +88,7 @@ frozen while lane work is in progress.
 | Foundation | `package.json`, `package-lock.json`, `LICENSE`, `src/index.mjs`, `src/index.d.ts`, `scripts/check.mjs`, `.github/workflows/ci.yml`, `docs/contract.md`, `docs/acceptance.md`, `docs/spec.md` |
 | CORE | `src/relay.mjs`, `src/schema.sql`, `src/sqlite.mjs`, `src/fault.mjs`, `src/validate.mjs`, `src/feed.mjs`; core, storage, board, device, and topology tests |
 | NETWORK/POOL | `src/broker.mjs`, `src/client.mjs`, `src/auth.mjs`, `src/config.mjs`, `src/pool.mjs`; network and pool tests |
-| CLI/DEMO/DOCS | `src/cli.mjs`, `examples/*`, `scripts/demo.mjs`, `scripts/capture.mjs`, `README.md`, `docs/api.md`, `docs/storage.md`, `docs/limits.md`, `docs/network.md`, `docs/boards.md`, `docs/topology.md`; CLI/example tests |
+| CLI/QA/DOCS | `src/cli.mjs`, `examples/*`, `tests/fixtures/ui/*`, `README.md`, `docs/api.md`, `docs/storage.md`, `docs/limits.md`, `docs/network.md`, `docs/boards.md`, `docs/topology.md`; CLI/example tests |
 | UI | `ui/*` and UI tests |
 
 Foundation created the package boundaries and contracts; lanes own only their
@@ -1450,9 +1454,10 @@ it is bounded by the one 10,000 ms deadline and does not extend lease expiry.
 `npm run check` checks JavaScript syntax, strict TypeScript declarations,
 package contents, and presence of all frozen contract modules. It never invokes
 `npm test` or Node's test runner. `npm test` is the separate automated test
-entry. `npm run demo` and `npm run capture` are bounded synthetic/demo
-entrypoints and must use actual Relay operations/receipts, not fixture output.
-Tests and demo capture use disposable temporary roots, loopback-only listeners,
+entry. There are no public demo or screenshot-generation commands. Internal
+UI verification helpers live under `tests/fixtures/ui/` and use actual Relay
+operations and committed receipts with synthetic participants.
+Tests and verification captures use disposable temporary roots, loopback-only listeners,
 ephemeral TLS/proxy identities, bounded timers, and `try/finally` cleanup.
 Cleanup closes only handles/processes created by that test and preserves the
 primary failure while reporting cleanup failure. Never use real credentials,
@@ -1527,9 +1532,9 @@ policy, certificates, services, or external agent configuration.
   Test credentials are random per run, stay in memory/private temp files, and
   are removed with that test root. Test fixtures and state are excluded from
   the npm package.
-- `npm run check` contains no test-runner or demo invocation. CI separately
-  runs `npm test` on Linux Node 24 and 26; the demo/capture commands are not CI
-  substitutes for automated tests or physical-host qualification.
+- `npm run check` contains no test-runner invocation. CI separately
+  runs `npm test` on Linux Node 24 and 26. Test fixtures and screenshots are not
+  substitutes for native-agent or physical-host qualification.
 
 ## 12. Native agent delivery (additive Relay/v2)
 
@@ -1537,6 +1542,21 @@ This section freezes the additive contract. [Native delivery](delivery.md) owns
 the complete client inventory and evidence boundary. Delivery is disabled by
 default and is not implemented or qualified by this documentation. The base
 store, CLI, and public runtime exports remain usable with it disabled.
+
+### OpenCode package entry
+
+The root package remains the nine-export Relay library. Its
+`@pugzui/relay/opencode-plugin` subpath is a programmatic module import, not an
+OpenCode package-target selector. The shipped `src/adapters/package.json` is a
+private directory manifest named `@pugzui/relay-opencode-plugin`, versioned with
+the root package, with `type: "module"` and `exports["."]` pointing directly to
+`./index.mjs`. That canonical entry serves both the programmatic subpath and
+directory loading; there is no parallel wrapper entry. OpenCode configuration
+can select the installed Relay package's `src/adapters` directory and supply
+the existing exact binding options.
+This adds no default library export, second plugin implementation, dependency,
+or separate publication requirement. A directory entry is not permission to
+install or enable it in an existing profile, and does not qualify delivery.
 
 ### Recipient summary
 

@@ -22,15 +22,17 @@ The stream is bounded and does not block a lease transaction. A hidden tab
 pauses motion and displays current state after resynchronization, not old events
 as current activity.
 
-The capture command uses the integrated UI at a loopback origin, submits a
-private demo token through the UI form, and waits for connected topology plus
+The internal browser verification fixture at `tests/fixtures/ui/capture.mjs`
+uses the integrated UI at a loopback origin, submits a
+private fixture token through the UI form, and waits for connected topology plus
 nonempty Inbox and Bounties panes before saving wide and narrow topology views,
 a narrow selected-board view scrolled into place, and runtime metadata. It checks
 the live origin, selected board, pane row counts, measured viewport and document
 width, visible keyboard focus, reduced-motion styles, and uncaught runtime
 exception count. Metadata contains board and row counts but no pane bodies,
-tokens, session IDs, or local paths. It requires the actual disposable demo
-server; it does not mock UI responses. The committed images and
+tokens, session IDs, or local paths. It requires an actual isolated Relay
+broker; it does not mock UI responses. New captures go to an owned temporary
+evidence directory, not the README or tracked image gallery. The retained images and
 [capture metadata](media/capture.json) are from a real authenticated run.
 Wide and narrow layouts were visually reviewed. Native browser checks also
 exercised metadata-only and work-only permissions, credential revocation,

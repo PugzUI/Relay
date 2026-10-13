@@ -200,7 +200,7 @@ async function closeBroker(broker) {
 }
 
 export async function migrateLocalStore(options) {
-  if (!object(options) || !["backup,configFile,root,to", "backup,root,to"].includes(Object.keys(options).sort().join(",")) || typeof options.root !== "string" || typeof options.backup !== "string" || ![2, 3].includes(options.to) || options.to === 2 && typeof options.configFile !== "string" || options.to === 3 && options.configFile !== undefined) fail("input", "Migration options are invalid");
+  if (!object(options) || !["backup,configFile,root,to", "backup,root,to"].includes(Object.keys(options).sort().join(",")) || typeof options.root !== "string" || !options.root || options.root.includes("\0") || typeof options.backup !== "string" || !options.backup || options.backup.includes("\0") || ![2, 3].includes(options.to) || options.to === 2 && (typeof options.configFile !== "string" || !options.configFile || options.configFile.includes("\0")) || options.to === 3 && options.configFile !== undefined) fail("input", "Migration options are invalid");
   if (options.to === 2 && (await readConfig(options.configFile)).delivery.enabled) fail("input", "Rollback requires a disabled delivery configuration");
   const root = resolve(options.root);
   const lock = await acquireLock(root);

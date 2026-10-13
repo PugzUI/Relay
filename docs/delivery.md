@@ -2,7 +2,45 @@
 
 ## Status
 
-As of 2026-10-12, this document freezes the Relay/v2 delivery contract and a read-only native-client inventory. A first-party OpenCode adapter is implemented as a distributable plugin and broker bridge. An isolated v2.0.26 smoke verified exact-session startup/status through the plugin-to-bridge path, but used a test bind callback and did not submit a prompt or exercise the live Relay supervisor/store. No native delivery, context observation, turn, or idle activation has been demonstrated. All D01–D26 cases in [acceptance](acceptance.md) remain pending; no native adapter is qualified.
+The Relay/v2 delivery contract and original read-only native-client inventory remain frozen. The first-party OpenCode plugin targets exactly v2.0.27. An isolated archive-installed probe verified real supervisor/store binding, notice admission and prepared context in the same idle native session, a primary model request, an exact completed model reply, and persisted safe idle. Three further reconciliations did not repeat delivery or consume the pending message. This is a narrow idle-path result, not full adapter qualification: busy/refusal/restart coverage and the other required clients remain open. D01–D26 in [acceptance](acceptance.md) remain pending as full cases. See the [native-delivery spike](../tests/spikes/003-opencode-native-delivery/README.md).
+
+The later [busy-context spike](../tests/spikes/005-opencode-busy-boundary/README.md)
+exposed and fixed binding loss when the native SDK ignored an abort signal.
+Real post-fix runs deferred message/work hints while the exact session was busy,
+preserved its binding, and admitted one payload-free notice after normal release.
+Earlier exact-response checks failed on free-router output; those receipts remain
+incomplete. A separate follow-up run completed both exact replies, ordered
+admission/context/turn/safe-idle observations, and three unchanged-state
+reconciliations with both queue kinds still pending and no repeated delivery.
+Its archive/source hashes and owned-resource cleanup were verified. This validates
+the controlled-context busy boundary only, not full D04, actual model-tool
+interruption safety, refusal/restart recovery, or complete native qualification.
+
+The subsequent [model-tool spike](../tests/spikes/007-opencode-tool-boundary/README.md)
+verified an actual model invoking a restricted native tool in the same bound
+session. Relay preserved that running tool while both queue kinds stayed pending,
+then delivered one notice after normal completion. Native tool/result readback,
+both exact replies, ordered delivery phases, safe idle, and three unchanged-state
+reconciliations passed. Two earlier failed reply epochs remain intact. This is
+one controlled native tool boundary, not full D04, real task handling, native
+refusal/restart qualification, or coverage of the other required clients.
+
+The [native permission spike](../tests/spikes/008-opencode-permission-hold/README.md)
+then exercised the runtime's real built-in read permission. Relay deferred both
+queue kinds through four held-permission samples without a notice or attempt.
+Native rejection removed the permission, interrupted its original turn, and left
+the same read call in an error state without completing the read. One subsequent
+notice produced an exact completed model reply in the same session, ordered
+delivery phases and safe idle; three reconciliations retained both pending items
+without repeating delivery. Archive/source verification and owned-resource
+cleanup passed. Earlier failed receipts remain intact. This is one permission
+case, not input-submission refusal, restart recovery, a complete permission
+matrix, real task handling, or full adapter qualification.
+
+Relay is independently usable. Executor, MCP, the private agent framework, and
+AI Intercom are not runtime dependencies or release prerequisites. Replacing
+an installed Intercom deployment is later, separately scoped work. Public demos
+and showcase work are deferred until real native delivery is qualified.
 
 Delivery is host-local, opt-in, and disabled by default. The basic Relay store,
 queue, broker, Pool, and CLI remain usable with delivery disabled. This feature
@@ -12,11 +50,11 @@ scheduler, public topology/report/feed fields, dashboard, terminal/UI automation
 or remote launch path. The installed-version snapshot below is one host’s
 discovery result, not a supported-version matrix.
 
-The client scope is the ten enabled receiving clients in the inspected managed catalog: Codex, Cursor, OMP, Antigravity, Hermes, Zed, ZCode, OpenCode, Kilo, and Cline. Shared discovery and orchestration entries are not receivers. The managed policy’s `first_class_clients` list is a discovery hint, not evidence of use, an input API, or qualification; it does not remove Zed or ZCode from this inventory.
+The required native-client scope is Codex, Cursor, OMP, Antigravity, Hermes, Zed, ZCode, OpenCode, Kilo, and Cline. The previous managed-catalog inspection supplied discovery evidence only; Relay does not require that catalog or its orchestration stack. Discovery labels establish neither a supported input API nor qualification, and do not remove Zed or ZCode from the required scope.
 
 ## Local runtime snapshot
 
-Version commands were read-only. Build hashes, local paths, credentials, and session identifiers are intentionally omitted. `zcode` was present, but its version lookup timed out and its help command did not exit within six seconds.
+This is the original inventory snapshot, not the later adapter version. Version commands were read-only. Build hashes, local paths, credentials, and session identifiers are intentionally omitted. `zcode` was present, but its version lookup timed out and its help command did not exit within six seconds.
 
 | Managed client | Observed surface | Local version result |
 |---|---|---|
@@ -102,7 +140,35 @@ Outside the first-party OpenCode adapter, the current managed bridges are lifecy
 
 - The current v2 plugin bridges `session.created`/`session.deleted` and mutates model context at prompt/context hooks. The `session.created` wake callback invokes a semantic hook but discards its output; it does not start a turn or deliver a notice.
 - OpenCode’s v2 plugin/session API can submit to an exact existing `sessionID`; use explicit `delivery: "queue"`, never `steer`, for Relay. A caller-supplied prompt ID is retry-safe: a repeated ID for an existing admission returns the original admission rather than adding another inbox item. Concurrent submissions can still run prompt hooks more than once, so this is not an exactly-once side-effect boundary. The API returns an inbox/admission record, not proof of model-visible context or a turn; session/message events provide separate observations. Permissions remain native and must not be bypassed.
-- Current Relay evidence: `@pugzui/relay/opencode-plugin` supplies the exact v2 PluginContext handoff and queues an idempotent prompt to the configured existing session. Its source separately observes context, `model.request`, and exact-session `session.status` idle events. The authenticated broker bridge checks exact Relay authority/worker/session/epoch and coalesces configured local/hub bindings on one target gate. In an isolated v2.0.26 smoke, the plugin verified the configured session with `session.get`, registered through the private bridge, and read fresh `session.wait` idle status. The bridge used a test bind callback, not a live Relay supervisor/store; no prompt was submitted, so native context/turn/safe-idle-after-turn remain unobserved. The plugin remains uninstalled; `launch` is not an adapter capability.
+- Current Relay evidence: `@pugzui/relay/opencode-plugin` supplies the exact v2.0.27 PluginContext handoff and queues an idempotent prompt to the configured existing session. It observes prepared context and primary `model.request`, then handles exact-session `session.execution.succeeded|failed|interrupted` and confirms idle through native `session.wait`. Per-attempt bridge reports are serialized so context, turn, and safe-idle observations cannot arrive out of order. The authenticated broker bridge checks exact Relay authority/worker/session/epoch and coalesces configured local/hub bindings on one target gate. Archive-installed native idle delivery, an exact completed model reply, and safe idle were observed on the isolated Linux surface; `launch` is not an adapter capability. The original v2.0.26 test-callback smoke remains historical evidence only.
+
+The v2.0.27 idle probe installed an actual `npm pack` archive offline and imported its exported plugin through a test-only package-directory observation wrapper. Both the supervisor/store and plugin used installed archive bytes; the native PluginContext was forwarded unchanged. A separate test-only inference plugin used an owner-approved, explicitly zero-priced route; it is not a Relay runtime dependency. Native message readback matched the stored admission ID and contained the notice only, not the queued payload. An exact completed assistant reply and all four ordered delivery timestamps were observed. This proves the archive-loaded idle path, not direct published-package loader configuration, busy-boundary/refusal/restart behavior, a work claim, completed handling, or acknowledgement. Earlier provider HTTP 403 and other failed probe receipts remain intact.
+
+### Installed plugin configuration
+
+The separately verified direct loader selects the archive-installed Relay
+package's `src/adapters` directory in an approved project's `opencode.json(c)`
+`plugins` entry. Its `package` value is that absolute directory path, not the
+Relay library root or the `@pugzui/relay/opencode-plugin` import string. The
+canonical `index.mjs` serves both this directory and the programmatic import;
+there is no separate plugin publication or second implementation.
+
+Supply the existing exact options: `relayRoot`, `profile`, `nativeSession`, and
+`bindings`. Each binding contains its current `authority`, `worker`, `sid`,
+and integer `epoch`; use actual session readback, never a remembered identity.
+The owning Relay supervisor must already be enabled on that root. This does
+not authorize installation, permission changes, or enabling an existing profile.
+
+The [direct-loader spike](../tests/spikes/004-opencode-direct-loader/README.md)
+observed one exact live-store binding with empty queues, then a separate real
+idle delivery through this configuration. OpenCode reported the Relay plugin
+active; no Relay observation wrapper or archive overlay was used. A read-only
+test helper confirmed native idle, and the free inference helper remained
+test-only. Exact notice/admission readback, an exact completed reply, all four
+ordered timestamps, gate release, unchanged-state coalescing and cleanup passed.
+This closes the local installed-directory loading gap, not native busy,
+hold/refusal, restart, other-client, or registry/Git-selector qualification.
+The earlier wrapper-loaded and failed receipts remain unchanged.
 
 ## Frozen recipient API
 
@@ -222,9 +288,9 @@ These references describe candidate upstream APIs, not Relay qualification:
 
 The inspected source did not map the exact local `agy` executable/version to an authoritative input API; no adapter claim is made.
 
-## WP4: current native adapter boundary
+## WP4: historical native adapter boundary
 
-As of 2026-10-12, OpenCode v2.0.26 is the sole implemented adapter and remains unqualified. The exported native plugin is designed to run inside OpenCode's own PluginContext; its setup validates the configured exact session/profile, supplies runtime and lifecycle identity, and connects to the broker through a private Unix socket with an owner-only token. It uses the existing Relay `bind()` path; the broker never imports or guesses a native SDK context. Plugin options must contain the exact pre-authorized Relay authority/worker/session/epoch bindings; one native plugin connection can bind local and configured hub scopes while sharing the same consumer and target gate.
+At the WP4 checkpoint, OpenCode v2.0.26 was the sole implemented adapter and remained unqualified. The exported native plugin is designed to run inside OpenCode's own PluginContext; its setup validates the configured exact session/profile, supplies runtime and lifecycle identity, and connects to the broker through a private Unix socket with an owner-only token. It uses the existing Relay `bind()` path; the broker never imports or guesses a native SDK context. Plugin options must contain the exact pre-authorized Relay authority/worker/session/epoch bindings; one native plugin connection can bind local and configured hub scopes while sharing the same consumer and target gate.
 
 The no-spend smoke used an isolated temporary HOME/profile and disposable empty OpenCode sessions created through the documented `POST /api/session` route. The real plugin verified its exact configured session through `session.get`, bound through the private bridge, and read fresh idle status via `session.wait`. The Node bridge's bind callback was a test stub, so this did not establish live Relay supervisor/store binding. No `session.prompt` or provider call occurred; both disposable sessions were deleted and confirmed absent, and the isolated processes were stopped. The repository-owned bridge/PluginContext fixture tests prove mechanics only. This work does not install or enable the plugin in an active profile, or change host permissions/configuration. Native context, turn, safe-idle-after-turn, refusal, restart, and end-to-end Relay persistence evidence remain pending; no native adapter is qualified. All other selected clients without concrete adapters remain `unsupported` in delivery status, with all adapter capabilities false; their messages remain in the authoritative Relay queue. Per-client API/version/capability/deployment gaps are recorded in [delivery blockers](delivery-blockers.json). This work does not pass D02, D03, D04, or D25, and the ten-client required support set remains unchanged.
 

@@ -1,8 +1,9 @@
 # Relay product specification
 
 Optional native agent delivery is specified in [docs/delivery.md](delivery.md).
-It is disabled by default, not currently implemented or qualified, and does not
-change the base Relay contract or establish idle-wake support.
+Its supervisor and first-party OpenCode plugin are implemented, but native
+delivery remains unqualified and disabled by default. It does not establish
+idle-wake support.
 
 ## Product
 
@@ -19,6 +20,13 @@ operator-configured. Workers are registered as `<device>:<runtime>:<slot>`;
 each session and lease is authority-specific, even when two stores contain the
 same address. Device names and numeric slots are persisted and never silently
 renamed or reused.
+
+Executor, MCP, the private agent framework, and AI Intercom are not runtime
+dependencies or release prerequisites. Replacing an existing Intercom
+deployment is a later, separately scoped migration. Product completion means
+real delivery and qualified native behavior, not a showcase or populated view.
+User-facing demos and showcase work are deferred until the product works;
+isolated test fixtures remain verification tools, not release claims.
 
 ## Required behavior
 
@@ -130,8 +138,9 @@ scrolling away from older Inbox history.
 
 Presentation text, artwork, and screenshots are owner-controlled. Do not add a
 subtitle, lead, hero caption, slogan, sales prose, invented empty-state copy,
-or generated headline. Capture only real synthetic demo activity and real
-receipts. A screenshot or backend feed does not itself establish visual
+or generated headline. Verification captures must come from actual Relay
+operations in isolated test fixtures, with their synthetic scope explicit.
+A screenshot or backend feed does not itself establish visual
 approval.
 
 ## Initial bounds and limits

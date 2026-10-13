@@ -38,6 +38,113 @@
     ]
   },
   "relayAdapterBoundary": {
+    "currentNativeProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "validated narrow archive-loaded idle path; no full native adapter qualified",
+      "observed": ["real supervisor/store binding from installed npm archive", "idle-session notice admission", "exact native message/admission ID match", "notice-only native text", "prepared native context", "primary turn-start hook", "exact completed model reply", "persisted safe idle and unlocked target gate", "three unchanged-state reconciliations without repeated delivery or queue consumption"],
+      "historicalProviderFailure": {"type": "provider.auth", "status": 403, "message": "OpenCode's free tier can only be used from within OpenCode"},
+      "notObserved": ["claim or acknowledgement", "direct published-package loader configuration", "busy/refusal/restart qualification", "other clients or platforms"],
+      "evidence": "../tests/spikes/003-opencode-native-delivery/README.md"
+    },
+    "directLoaderProbe": {
+      "runtimeVersion": "v2.0.27",
+      "pluginSource": "installed Relay src/adapters directory",
+      "observationWrapperUsed": false,
+      "verdict": "validated direct local archive loading and narrow idle delivery; no full native adapter qualified",
+      "observed": [
+        "native inventory reported the real directly loaded Relay plugin active",
+        "exact live-store binding with empty queues and attempts in a binding-only run",
+        "separate direct idle delivery with exact native notice/admission readback and completed model reply",
+        "ordered admission/context/turn/safe-idle timestamps and unlocked target gate",
+        "three unchanged-state reconciliations without repeated delivery or queue consumption",
+        "owned native session, processes, bridge and private-profile cleanup"
+      ],
+      "notObserved": ["native busy/refusal/restart qualification", "claim or acknowledgement", "registry/Git package selectors", "other clients or platforms"],
+      "evidence": "../tests/spikes/004-opencode-direct-loader/README.md"
+    },
+    "busyContextProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "historical partial controlled-context busy path; exact-response receipts incomplete; no full native adapter qualified",
+      "observed": [
+        "native SDK wait resolved with an aborted signal after the bridge command deadline",
+        "deadline fix preserved exact native binding while message and work hints remained pending",
+        "repeated real busy-window reads showed no premature attempt or notice",
+        "controlled native context released normally without interruption",
+        "one native notice matched the Relay admission ID and excluded queued payloads",
+        "native context and primary turn observations persisted; one post-fix run also persisted safe idle",
+        "owned session deletion/readback and process, bridge, PTY, private-profile cleanup"
+      ],
+      "notObserved": ["successful exact preparation/delivery replies", "completed post-delivery unchanged-state reconciliations", "model-tool interruption safety or full D04", "hold/refusal or restart/uncertain recovery", "claim or acknowledgement", "other clients or platforms"],
+      "evidence": "../tests/spikes/005-opencode-busy-boundary/README.md#historical-partial-observations"
+    },
+    "inferencePathProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "historical partial request-path diagnosis; exact busy-delivery reply failed; no full native adapter qualified",
+      "observed": [
+        "two primary chat requests used the configured agent, retained both reply instructions, and enabled no tools",
+        "response-model identifiers differed between preparation and delivery",
+        "exact preparation reply succeeded; delivery acknowledged state but failed the exact reply check",
+        "one notice matched native admission in the same session; safe idle unlocked the gate with message and work still pending",
+        "owned session, processes, bridge, PTY and private-profile cleanup",
+        "approved catalog exposed no fixed model route with explicit zero input/output prices"
+      ],
+      "notObserved": ["cause of the historical safety-classification output", "successful exact busy-delivery reply", "post-delivery unchanged-state reconciliations", "model-tool interruption safety or full D04", "hold/refusal or restart/uncertain recovery", "claim or acknowledgement", "other clients or platforms"],
+      "historicalInferenceLimitation": "The variable router failed this diagnostic epoch's exact reply check. A later owner-approved run passed the complete controlled-context probe without a fixed model; this is no longer a missing-input blocker for that narrow boundary. Earlier failed receipts remain unchanged.",
+      "evidence": "../tests/spikes/006-opencode-inference-path/README.md#what-worked"
+    },
+    "successfulBusyContextProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "validated complete controlled-context busy boundary; model-tool interruption safety and full native adapter qualification remain open",
+      "observed": [
+        "four real busy-window samples preserved the exact binding and both pending queue kinds without an attempt or notice",
+        "held native context released normally",
+        "separate exact preparation and delivery replies in the same native session",
+        "one native notice matched the Relay admission and excluded queued payloads",
+        "ordered admission/context/turn/safe-idle phases and unlocked target gate",
+        "three unchanged-state reconciliations retained message and work without another attempt or notice",
+        "no delivery read failures; owned session, process, bridge, PTY and private-profile cleanup",
+        "installed archive and all recorded executed-source hashes matched the new receipt"
+      ],
+      "notObserved": ["model-tool interruption safety or full D04", "native hold/refusal", "restart/uncertain recovery", "claim or acknowledgement", "other clients or platforms"],
+      "evidence": "../tests/spikes/005-opencode-busy-boundary/README.md#successful-follow-up-native-epoch"
+    },
+    "modelToolBusyProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "validated one controlled genuinely model-invoked native tool boundary; full D04 and native adapter qualification remain open",
+      "observed": [
+        "real model invoked the sole registered tool; native running-tool readback matched the executor in the exact active session",
+        "three busy-window samples preserved the binding and both pending queue kinds without an attempt or notice",
+        "same tool completed once after normal release without native cancellation; execution-after hook confirmed its result",
+        "exact preparation and delivery replies, one payload-free notice matching native admission, ordered phases and safe idle",
+        "three unchanged-state reconciliations retained message and work without another attempt or notice; target gate unlocked with no read failures",
+        "archive/source snapshots matched; owned session, process, bridge, PTY and private-profile cleanup passed"
+      ],
+      "historicalFailures": [
+        "first epoch returned the preparation challenge again; its result observer did not handle the SDK's legal normalized text-content array",
+        "second epoch returned a whitespace-padded delivery challenge; raw comparison rejected it and its response-model observation remained unknown"
+      ],
+      "notObserved": ["full D04 across required runtimes and surfaces", "native hold/refusal", "restart/uncertain recovery", "real task claim or acknowledgement", "other clients or platforms"],
+      "evidence": "../tests/spikes/007-opencode-tool-boundary/README.md"
+    },
+    "nativePermissionHoldProbe": {
+      "runtimeVersion": "v2.0.27",
+      "verdict": "validated one real built-in read permission hold/rejection and post-refusal delivery; complete native adapter qualification remains open",
+      "observed": [
+        "real model called the native read tool; pending permission identified the same session, message and sole running tool call",
+        "four held-permission samples preserved the binding and both pending queue kinds without an attempt or notice",
+        "native reject decision removed the permission and left the same read call in an error state without a completed read; original turn interrupted",
+        "one subsequent payload-free notice reached the same native session, with an exact completed model reply and ordered admission/context/turn/safe-idle phases",
+        "three unchanged-state reconciliations retained message and work without another attempt or notice; target gate unlocked with no delivery read failures",
+        "27 installed package files and 13 executed-source snapshots matched; owned session, process, bridge, PTY and private-profile cleanup passed"
+      ],
+      "historicalFailures": [
+        "custom gate did not establish an actual permission hold; declaring a permission option was insufficient",
+        "first built-in-read epoch established hold/rejection but verifier demanded a reply after expected native interruption and mislabeled that failure as provider refusal",
+        "next epoch observed post-refusal notice admission/context/turn but timed out without a completed model reply"
+      ],
+      "notObserved": ["full native permission matrix", "input-submission refusal", "restart/uncertain recovery", "real task claim or acknowledgement", "other required clients or platforms", "full adapter qualification"],
+      "evidence": "../tests/spikes/008-opencode-permission-hold/README.md"
+    },
     "invocation": "The Relay broker calls startDeliveryAdapter({client, bind, signal, root, onEvidence}) in the broker process; the OpenCode plugin connects over an authenticated private Unix socket.",
     "nativeRuntimeContextProvided": false,
     "bindingRequired": [
@@ -53,7 +160,7 @@
       "capabilities",
       "consumer"
     ],
-    "finding": "The broker intentionally receives no native SDK/plugin context. The Relay-owned OpenCode plugin runs inside its v2 PluginContext and hands exact session/profile/lifecycle identity plus explicit Relay authority/worker/session/epoch bindings through the private bridge to the existing bind callback. The native smoke used a test bind callback and did not verify live Relay persistence. Other clients remain unimplemented.",
+    "finding": "The broker intentionally receives no native SDK/plugin context. The Relay-owned OpenCode plugin runs inside its v2 PluginContext and hands exact session/profile/lifecycle identity plus explicit Relay authority/worker/session/epoch bindings through the private bridge to the existing bind callback. The original smoke used a test bind callback; the later v2.0.27 archive-installed probe used the real supervisor/store and observed native notice admission/context/primary request, an exact completed model reply, and safe idle. Its package-directory observation wrapper and zero-priced inference plugin are test-only. Other clients remain unimplemented.",
     "smallestRequiredAuthorization": "OpenCode deployment remains owner-controlled: enable the exported plugin only in an approved isolated profile, grant only explicitly approved native permissions, and supply an explicit existing Relay recipient mapping in plugin options. This stage made no host configuration or permission changes."
   },
   "runtimeVersions": {
@@ -157,9 +264,9 @@
       "relayIdle": "implemented-unqualified",
       "launch": "not an adapter capability; existing local Pool/prime only",
       "pluginEntryPoint": "@pugzui/relay/opencode-plugin",
-      "runtimeVersion": "v2.0.26 (pinned implementation surface)",
-      "apiFinding": "The packaged plugin implementation checks the configured exact session through PluginContext, uses session.prompt with queue delivery and a stable caller-supplied ID, and separately observes context, model-request, and safe-idle events. Its Relay bindings share one consumer and stable profile/session target gate across local and hub authorities. The v2.0.26 native smoke verified exact session.get, plugin-to-bridge registration, and fresh session.wait idle in an isolated disposable session, but used a test bind callback; no live Relay supervisor/store binding, prompt, provider call, context, turn, or safe-idle-after-turn was observed.",
-      "smallestNextStep": "In an approved isolated profile, verify the plugin against the live Relay supervisor/store using an explicit existing Relay mapping, then separately qualify native context, turn, safe-idle-after-turn, refusal, and restart recovery without using a real user session or provider spend. Host deployment and permissions remain owner-controlled."
+      "runtimeVersion": "v2.0.27 (current guarded implementation; unqualified)",
+      "apiFinding": "The actual npm archive was installed offline. The earlier wrapper-loaded idle result remains separate; a subsequent direct src/adapters directory configuration loaded the canonical index.mjs entry without wrapping Relay or overlaying the installed archive. Native inventory reported the plugin active and the real supervisor/store verified its exact binding. A committed string notice reached the same previously idle session; native readback matched its admission and excluded the queued payload. A zero-priced owner-approved inference route produced an exact completed reply. Ordered native observations and safe idle were persisted, and three reconciliations retained the pending message without another attempt. Full busy/refusal/restart qualification remains open; registry/Git selectors were not exercised.",
+      "smallestNextStep": "Qualify native input-submission refusal, other permission cases, restart/uncertain recovery, and remaining D04/runtime cases in isolated sessions. Controlled-context, one genuinely model-invoked tool boundary, and one real read-permission hold/rejection now have separate successful delivery receipts; earlier failures remain intact. Do not spoof provider headers, inherit credentials, use a real user session, or substitute a synthetic provider receipt. Host deployment and permissions remain owner-controlled."
     }
   ]
 }

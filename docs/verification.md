@@ -9,6 +9,51 @@ consumer declarations, required modules, and the actual package-file manifest.
 The packaging check accepts the native npm 11 and npm 12 JSON layouts while
 retaining identity, entry-count, required-file and private-artifact checks.
 
+The later busy-boundary checkpoint passed **130 tests, no failures or skips**
+and the package check, plus both focused Python reply-reader regressions.
+Its new regression reproduced an uncancellable native wait before the fix and
+now covers bounded busy/unknown status, pending-read limits, idle recovery, and
+cleanup. The [real busy-context probe](../tests/spikes/005-opencode-busy-boundary/README.md)
+separately observed deferral and preserved binding, but its exact-response checks
+failed. Those original failed receipts remain unchanged.
+
+A separate follow-up OpenCode 2.0.27 native epoch passed the complete controlled
+context-boundary probe: four busy samples without an attempt/notice, exact
+preparation and delivery replies in the same session, ordered native phases,
+safe idle, and three unchanged-state reconciliations. Both queue kinds stayed
+pending; the target gate unlocked without another attempt. Archive/source hashes
+and owned-resource cleanup were verified. This is not a new full-suite result,
+full D04/model-tool interruption proof, or complete adapter qualification. See
+the [request-path evidence](../tests/spikes/006-opencode-inference-path/README.md).
+
+A later [model-tool busy probe](../tests/spikes/007-opencode-tool-boundary/README.md)
+used a genuinely model-invoked native tool, not an operator shell or held context
+callback. Three running-tool samples preserved the binding and both pending queue
+kinds with no attempt/notice. Normal tool completion, native result confirmation,
+both exact replies, ordered phases, safe idle, three reconciliations, archive/source
+hashes, and owned-resource cleanup passed. Two earlier failed reply receipts remain
+unchanged. The separate focused run passed 25 Node tests and four Python checks
+across three regression files plus the package check. A post-execution cleanup
+correction removed an unrelated context-wait readback flag from tool mode; its
+regression failed before correction and passed afterward without rewriting the
+native receipt. This qualifies only the recorded controlled-tool
+boundary, not full D04, native refusal/restart recovery, or complete delivery.
+
+A subsequent [read-permission probe](../tests/spikes/008-opencode-permission-hold/README.md)
+observed an actual native permission tied to the sole running read call. Four
+held-permission samples preserved the binding and both pending queue kinds with
+no attempt/notice. Native rejection removed the permission, interrupted that
+original turn and left the same read call in an error state without a completed
+read. A subsequent notice reached a real model turn and passed the raw exact
+delivery-reply check, ordered phases, safe idle and three unchanged-state
+reconciliations. There were no delivery read failures and the target unlocked.
+All 27 installed package files and 13 executed-source snapshots matched;
+owned-resource cleanup passed. Three Node tests and 12 Python helper checks
+across four files passed separately, plus the package check. The earlier custom
+gate, interrupted-preparation verifier and model-timeout epochs remain distinct.
+This is one native permission case, not full input-submission refusal,
+restart/uncertain recovery, real task handling or complete adapter qualification.
+
 The executed cases cover durable admission and receipts, keyed conflicts,
 process contention and recovery, session/epoch fencing, honest JSON, immutable
 store roles, scoped enrollment and registration, local/hub capacity recovery,
@@ -93,19 +138,54 @@ A fresh Chromium 153.0.8010.52 profile authenticated to the actual loopback demo
 
 Permission-restricted panes, credential revocation, empty/inert-text behavior and the 513-agent snapshot-reset/live-feed recovery remain evidenced by the retained [browser QA record](media/browser-qa.json) and [snapshot-recovery record](media/snapshot-recovery.json). These artifacts were inspected, but their browser flows were not replayed in this checkpoint; the current-run browser observations above are separate. The machine-readable record distinguishes these sources and lists all remaining qualification boundaries.
 
+## Direct installed OpenCode loader checkpoint
+
+The [direct-loader spike](../tests/spikes/004-opencode-direct-loader/README.md)
+installed an actual npm archive offline and selected its `src/adapters`
+directory in isolated OpenCode 2.0.27 configuration. The native inventory
+reported the Relay plugin active, and the real supervisor/store persisted
+the exact recipient binding with queues and attempts empty.
+
+A separate direct-delivery run observed one notice in the same previously idle
+session, matching native admission readback, an exact completed model reply,
+ordered context/turn/safe-idle observations, an unlocked target gate, and three
+unchanged-state reconciliations with no repeated delivery or queue consumption.
+No Relay observation wrapper, SDK override, or installed-archive overlay was
+used. The independent idle-read and free-inference helpers are test-only.
+Owned-session/process/bridge/profile cleanup passed. Original receipt hashes
+remain attached to their execution epoch; later documentation edits do not
+rewrite the executed archives or older evidence.
+
+On Node 26.11.1 / npm 12.2.0, `npm run check` preserved nine public exports,
+passed strict declarations and validated 27 package files with fixtures
+excluded. The full project suite passed 129 tests with no failures or skips.
+These checks do not qualify the remaining native matrix.
+
 ## Open qualification boundaries
 
-- **Native delivery:** WP1 froze a documentation/contract baseline only. All
-  D01–D26 cases remain pending; no Relay native adapter, host configuration
-  change, real agent-session delivery, or idle-turn observation was performed.
+- **Native delivery:** The delivery supervisor and first-party OpenCode plugin
+  are implemented, but all D01–D26 cases remain pending. The later isolated
+  OpenCode 2.0.27 probe installed a real npm archive, used its live Relay
+  supervisor/store and exported plugin, matched notice admission to native
+  message readback, and observed prepared context, primary turn start, an exact
+  completed model reply, and persisted safe idle. Three further reconciliations
+  retained the pending message without repeating delivery. The observation
+  wrapper and free inference plugin are test-only. The subsequent direct-loader
+  checkpoint above verified local archive directory configuration and idle
+  delivery without wrapping Relay. Registry/Git package selectors,
+  busy/refusal/restart behavior, and completed handling remain unverified.
+  Earlier provider refusals and failed runs remain separate evidence. No
+  installed-host configuration changed. Browser/store fixtures do not qualify
+  native delivery. Public demos are deferred, not readiness gates.
   The version snapshot in [delivery.md](delivery.md) is not a support matrix.
 - **A21:** separately authorized physical two-host LAN/Tailscale exchanges.
 - **A29:** actual private proxy/access-policy inspection and denied-third-device
   observations.
 - Native process identity and launch qualification was performed on Linux;
   Windows, macOS and Termux are not certified by these runs.
-- No paid model, real coding-agent runtime or existing agent session was used.
-  Native launch evidence uses the harmless configured Node child protocol.
+- Earlier launch evidence uses the harmless configured Node child protocol.
+  The later native-delivery probe used a real disposable OpenCode runtime,
+  without inherited provider credentials, paid fallback, or a real user session.
 - Owner-specific artwork, additional presentation copy and visual approval are
   separate from the backend/runtime evidence. No unsupplied marketing hero,
   slogan, diagram or decorative asset is included.

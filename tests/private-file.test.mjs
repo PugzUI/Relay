@@ -25,7 +25,7 @@ test("client and capture token readers reject a writerless FIFO without blocking
     assert.equal(created.status, 0, created.stderr);
 
     const clientUrl = new URL("../src/client.mjs", import.meta.url).href;
-    const captureUrl = new URL("../scripts/capture.mjs", import.meta.url).href;
+    const captureUrl = new URL("./fixtures/ui/capture.mjs", import.meta.url).href;
     const script = `
       const [{ connect }, { readCaptureToken }] = await Promise.all([import(process.argv[1]), import(process.argv[2])]);
       const outcomes = [];

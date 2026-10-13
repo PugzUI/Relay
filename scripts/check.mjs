@@ -117,7 +117,6 @@ client.then((connected) => {
 const expectedModules = [
   "src/cli.mjs", "src/fault.mjs", "src/relay.mjs", "src/broker.mjs", "src/client.mjs", "src/validate.mjs",
   "src/sqlite.mjs", "src/schema.sql", "src/auth.mjs", "src/config.mjs", "src/pool.mjs", "src/feed.mjs",
-  "scripts/demo.mjs", "scripts/capture.mjs",
 ];
 const absent = [];
 for (const path of expectedModules) {
@@ -166,7 +165,8 @@ try {
       if (forbiddenPaths.length) {
         failures.push(`packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`);
       }
-      const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts",
+      const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts", "src/adapters/package.json",
+        "src/adapters/index.mjs", "src/adapters/opencode-plugin-core.mjs", "src/adapters/opencode-bridge.mjs",
         ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
       const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));
       if (missingPacked.length) failures.push(`packaging: missing runtime files ${JSON.stringify(missingPacked)}`);
@@ -177,11 +177,22 @@ try {
       if (manifest.name !== "@pugzui/relay" || manifest.engines?.node !== ">=24.0.0" || manifest.license !== "MIT") {
         failures.push("packaging: package identity, supported Node engine, or license changed from the frozen contract");
       }
-      for (const script of ["check", "test", "demo", "capture"]) {
+      for (const script of ["check", "test"]) {
         if (typeof manifest.scripts?.[script] !== "string") failures.push(`packaging: missing npm script ${script}`);
       }
       if (Object.keys(manifest.dependencies ?? {}).length !== 0) {
         failures.push("packaging: runtime dependencies must remain empty");
+      }
+      const pluginManifest = JSON.parse(await readFile(join(root, "src/adapters/package.json"), "utf8"));
+      if (pluginManifest.name !== "@pugzui/relay-opencode-plugin" || pluginManifest.version !== manifest.version
+        || pluginManifest.private !== true || pluginManifest.type !== "module"
+        || JSON.stringify(pluginManifest.exports) !== JSON.stringify({ ".": "./index.mjs" })
+        || Object.keys(pluginManifest.dependencies ?? {}).length !== 0) {
+        failures.push("packaging: OpenCode directory manifest must select the existing plugin without dependencies");
+      }
+      if (manifest.exports?.["./opencode-plugin"]?.import !== "./src/adapters/index.mjs"
+        || packedPaths.includes("src/adapters/opencode-plugin.mjs")) {
+        failures.push("packaging: OpenCode imports and directory loading must share one canonical entry");
       }
       for (const path of ["package-lock.json", "LICENSE", "src/index.mjs", "src/index.d.ts"]) {
         await stat(join(root, path));

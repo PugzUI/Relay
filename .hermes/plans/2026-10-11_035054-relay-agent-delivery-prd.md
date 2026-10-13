@@ -6,6 +6,8 @@
 
 **Scope:** Opt-in host-local delivery of Relay pending-state hints to exact native sessions, using the existing authoritative stores, session fencing, authenticated client, and bounded Pool/prime launch path.
 
+**Product boundary:** Relay is an independently usable tool, not an Executor integration or an AI Intercom migration. Neither the private framework nor its installed bus is a runtime dependency or release prerequisite. Native plugins/hooks belong to the supported agent runtime, not a required private orchestration stack. Replacing AI Intercom is later, separately scoped work. Complete and qualify the real product first; defer public demos, screenshot galleries, and showcase work. Isolated fixtures remain internal verification only and cannot satisfy native-delivery gates.
+
 **Owner:** PugzUI. Presentation copy and deployment changes remain owner-controlled.
 
 ## 1. Problem and required outcome
@@ -75,6 +77,13 @@ This PRD extends the current contract; it does not silently override its v1 expo
 The implementation must inventory every enabled managed client intended to receive Relay notifications, rather than repairing only the reported OpenCode callback. Hermes and OpenCode are priority discovery targets, not already-qualified integrations. Other enabled clients must appear in the same inventory; no automatic-wake capability is presumed for any of them.
 
 Record the required behavior for each client before implementation. For PugzUI’s unattended rollout, idle activation is required for every client assigned unattended receiving work. An unsupported native API is a genuine rollout blocker for that client, not permission to mark it covered or silently remove it. Only an explicit owner scope change may narrow the required support set. The standalone Relay core can remain usable without notification adapters, but that is not completion of this delivery increment.
+
+### Owner-approved inference selections
+
+- Aperture aliases: `free`, `openrouter/free`, and `kilo-auto/free`.
+- Client-specific proprietary exceptions: `cursor: auto`, `agy: gemini-3.8-flash`, and `codex: gpt-6-luna`.
+
+Preserve these identifiers exactly and verify their actual native model-selection surfaces before use. The exceptions belong to the named clients; they are not OpenCode or global paid-model fallbacks. Aperture alias selection must respect its advertised endpoint dialect and verified pricing rather than infer zero cost from a name. Model selection is not evidence of API support or native delivery, does not narrow the rollout support set, and does not authorize installed-profile changes, production-session takeover, or credential disclosure.
 
 ## 4. Vocabulary and evidence levels
 
@@ -316,7 +325,7 @@ Every case starts **pending**. Proposed observations below are not recorded resu
 | D23 | Shutdown/cancellation | All owned timers/feeds/handles stop; accepted-but-unconfirmed native input remains uncertain; existing sessions/unowned processes are untouched. |
 | D24 | Retention/privacy/output | Cleanup preserves unresolved coordination and pending work; bounded logs/notices/captures contain no payload, token, session handle, private path, or terminal-control injection. |
 | D25 | Native support matrix | Every enabled client has real version/surface evidence for required capabilities; synthetic adapter success cannot be promoted to native qualification. |
-| D26 | Clean-checkout documentation | Actual release commands and recorded synthetic example reproduce documented behavior; no planned command is presented as implemented, no unsupported platform/network claim is added. |
+| D26 | Clean-checkout documentation | Actual release commands and a recorded message/claim/acknowledgement workflow reproduce documented behavior; no planned command is presented as implemented, no unsupported platform/network claim is added. Public demos are not a readiness gate. |
 
 For D03/D04/D25, retain both the native session/turn observation and Relay’s recorded admission/claim/ack observations privately during verification, then publish only redacted evidence. Do not use sender-side acceptance or delivery-consumer logs alone as proof of receiver behavior. Any provider outage or unavailable native API is recorded as a limitation, not replaced with plausible output.
 

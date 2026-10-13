@@ -4,8 +4,10 @@ import { lstat, mkdtemp, open as openFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createPool } from "../src/pool.mjs";
-import { LIMITS } from "../src/validate.mjs";
+import { createPool } from "../../../src/pool.mjs";
+import { LIMITS } from "../../../src/validate.mjs";
+
+// Test-only synthetic participants exercise the real store and broker, not native agents.
 
 const DEFAULT_DURATION_MS = 300_000;
 const MAX_DURATION_MS = 3_600_000;
@@ -13,7 +15,7 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(proc
 
 if (isMain) await main();
 
-export function demoOptions(args, env = process.env) {
+export function fixtureOptions(args, env = process.env) {
   const values = new Map();
   let serveMode = false;
   for (let i = 0; i < args.length; i++) {
@@ -26,12 +28,12 @@ export function demoOptions(args, env = process.env) {
       const value = args[++i];
       if (value === undefined) throw new Error(`${arg} requires a value`);
       values.set(arg, value);
-    } else throw new Error("usage: npm run demo [-- --serve [--port PORT] [--duration-ms MS]]");
+    } else throw new Error("usage: node tests/fixtures/ui/store.mjs [--serve [--port PORT] [--duration-ms MS]]");
   }
   if (!serveMode && values.size) throw new Error("--port and --duration-ms require --serve");
   if (!serveMode) return { serve: false };
-  const port = positiveInt(values.get("--port") ?? env.RELAY_DEMO_PORT ?? "4200", "port", 65_535);
-  const durationMs = positiveInt(values.get("--duration-ms") ?? env.RELAY_DEMO_DURATION_MS ?? String(DEFAULT_DURATION_MS), "duration", MAX_DURATION_MS);
+  const port = positiveInt(values.get("--port") ?? env.RELAY_FIXTURE_PORT ?? "4200", "port", 65_535);
+  const durationMs = positiveInt(values.get("--duration-ms") ?? env.RELAY_FIXTURE_DURATION_MS ?? String(DEFAULT_DURATION_MS), "duration", MAX_DURATION_MS);
   if (serveMode && durationMs < 1_000) throw new Error("duration must be at least 1000 ms");
   return { serve: true, port, durationMs };
 }
@@ -45,28 +47,28 @@ function positiveInt(value, label, max) {
 
 async function main() {
   try {
-    const options = demoOptions(process.argv.slice(2));
-    if (options.serve) await serveDemo(options);
-    else await terminalDemo();
+    const options = fixtureOptions(process.argv.slice(2));
+    if (options.serve) await serveFixture(options);
+    else await inspectFixture();
   } catch (error) {
     const details = error instanceof AggregateError ? `${safeMessage(error)}: ${error.errors.map(safeMessage).join("; ")}` : safeMessage(error);
-    process.stderr.write(`demo failed: ${details}\n`);
+    process.stderr.write(`fixture failed: ${details}\n`);
     process.exitCode = 1;
   }
 }
 
-async function terminalDemo() {
-  const { open, setup } = await import("../src/index.mjs");
-  const parent = await mkdtemp(join(tmpdir(), "relay-demo-"));
+async function inspectFixture() {
+  const { open, setup } = await import("../../../src/index.mjs");
+  const parent = await mkdtemp(join(tmpdir(), "relay-ui-fixture-"));
   const parentIdentity = await identifyDirectory(parent);
   const root = join(parent, "store");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("demo time limit reached")), 15_000);
+  const timeout = setTimeout(() => controller.abort(new Error("fixture time limit reached")), 15_000);
   const signals = installSignals(controller);
   let relay;
   let failure;
   try {
-    const device = setup({ root, device: "demo-local", role: "hub" });
+    const device = setup({ root, device: "fixture-local", role: "hub" });
     relay = open({ root });
     const result = await populate(relay, device, controller.signal);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -83,16 +85,16 @@ async function terminalDemo() {
   }
 }
 
-async function serveDemo({ port, durationMs }) {
-  const { connect, open, serve, setup } = await import("../src/index.mjs");
-  const parent = await mkdtemp(join(tmpdir(), "relay-demo-"));
+async function serveFixture({ port, durationMs }) {
+  const { connect, open, serve, setup } = await import("../../../src/index.mjs");
+  const parent = await mkdtemp(join(tmpdir(), "relay-ui-fixture-"));
   const parentIdentity = await identifyDirectory(parent);
   const root = join(parent, "store");
-  const tokenDestination = process.env.RELAY_DEMO_TOKEN_FILE
-    ? resolve(process.env.RELAY_DEMO_TOKEN_FILE)
+  const tokenDestination = process.env.RELAY_FIXTURE_TOKEN_FILE
+    ? resolve(process.env.RELAY_FIXTURE_TOKEN_FILE)
     : join(parent, "capture.token");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error("demo duration reached")), durationMs);
+  const timeout = setTimeout(() => controller.abort(new Error("fixture duration reached")), durationMs);
   const signals = installSignals(controller);
   let device;
   let tokenRecord;
@@ -106,11 +108,11 @@ async function serveDemo({ port, durationMs }) {
   let failure;
   const sessions = [];
   try {
-    device = setup({ root, device: "demo-local", role: "hub" });
+    device = setup({ root, device: "fixture-local", role: "hub" });
     relay = open({ root });
     const result = await populate(relay, device, controller.signal, sessions, { serve: true });
     tokenRecord = await createToken(tokenDestination);
-    await writeDemoFiles(parent, device, tokenRecord.token, port);
+    await writeFixtureFiles(parent, device, tokenRecord.token, port);
     pool = createPool({
       local: relay,
       hub: null,
@@ -145,7 +147,7 @@ async function serveDemo({ port, durationMs }) {
         if (!controller.signal.aborted) controller.abort(error);
       });
     broker = await serve({ root, configFile: join(parent, "config.json") });
-    if (broker.address?.port !== port || broker.address?.address !== "127.0.0.1") throw new Error("demo broker did not bind the configured loopback address");
+    if (broker.address?.port !== port || broker.address?.address !== "127.0.0.1") throw new Error("fixture broker did not bind the configured loopback address");
     api = await connect({ url: `http://127.0.0.1:${port}`, tokenFile: tokenDestination, mode: "local" });
     const topology = await api.snapshot({ limit: 64 });
     process.stdout.write(`${JSON.stringify({
@@ -158,7 +160,6 @@ async function serveDemo({ port, durationMs }) {
       bounties: result.bounties,
       receipts: result.receipts,
       topology: { authority: topology.authority, totals: topology.totals, visible: topology.visible, cursor: topology.cursor },
-      capture: `RELAY_CAPTURE_TOKEN_FILE=${tokenDestination} npm run capture`,
     }, null, 2)}\n`);
     await waitForStop(controller.signal);
     if (backgroundFailure) throw backgroundFailure;
@@ -168,7 +169,7 @@ async function serveDemo({ port, durationMs }) {
     throw error;
   } finally {
     clearTimeout(timeout);
-    controller.abort(new Error("demo cleanup"));
+    controller.abort(new Error("fixture cleanup"));
     signals.remove();
     const cleanup = [];
     if (maintenance) await maintenance.catch((error) => cleanup.push(error));
@@ -197,18 +198,18 @@ async function populate(relay, device, signal, sessions = [], { serve = false } 
   const workers = [workerA, workerB];
   for (const worker of workers) sessions.push({ worker: worker.id, id: (await relay.join(worker.id)).id });
 
-  const inboxAdmission = await relay.post(sessions[0].id, hostBoard, { msg: "Synthetic demo workers are ready." });
-  await relay.post(sessions[0].id, "bounty", { msg: "Synthetic demo workers are ready." });
+  const inboxAdmission = await relay.post(sessions[0].id, hostBoard, { msg: "Synthetic test workers are ready." });
+  await relay.post(sessions[0].id, "bounty", { msg: "Synthetic test workers are ready." });
   const workAdmissions = [
-    await relay.post(sessions[0].id, "bounty", { work: { task: "inspect", input: "relay demo topology" } }, { needs: ["inspect"] }),
-    await relay.post(sessions[0].id, hostBoard, { work: { task: "verify", input: "relay demo board" } }, { needs: ["verify"] }),
+    await relay.post(sessions[0].id, "bounty", { work: { task: "inspect", input: "relay fixture topology" } }, { needs: ["inspect"] }),
+    await relay.post(sessions[0].id, hostBoard, { work: { task: "verify", input: "relay fixture board" } }, { needs: ["verify"] }),
   ];
 
   const consumed = [];
   for (const i of serve ? [0] : [0, 1]) {
     const board = i === 0 ? "bounty" : hostBoard;
     const lease = await relay.claim(sessions[i].id, { board, kind: "work" });
-    if (!lease?.work || typeof lease.work.input !== "string") throw new Error("demo work was not claimable");
+    if (!lease?.work || typeof lease.work.input !== "string") throw new Error("fixture work was not claimable");
     if (signal.aborted) throw signal.reason;
     const workResult = computeWork(lease.work.input);
     if (signal.aborted) {
@@ -273,7 +274,7 @@ function delay(ms, signal) {
   });
 }
 
-function isNormalStop(reason) { return reason?.message === "demo duration reached" || reason?.message === "demo interrupted" || reason?.message === "demo cleanup"; }
+function isNormalStop(reason) { return reason?.message === "fixture duration reached" || reason?.message === "fixture interrupted" || reason?.message === "fixture cleanup"; }
 
 function isWithin(parent, path) { return resolve(path).startsWith(`${resolve(parent)}${sep}`); }
 
@@ -287,11 +288,11 @@ function computeWork(input) {
   return value.slice(0, 16);
 }
 
-async function writeDemoFiles(parent, device, token, port) {
+async function writeFixtureFiles(parent, device, token, port) {
   const registry = {
     version: 1,
     credentials: [{
-      principal: "relay-demo",
+      principal: "relay-fixture",
       tokenDigest: createHash("sha256").update(token).digest("hex"),
       grant: {
         enroll: [],
@@ -340,7 +341,7 @@ async function createToken(path) {
       const current = await lstat(path);
       if (created && current.isFile() && !current.isSymbolicLink() && current.dev === created.dev && current.ino === created.ino) await rm(path);
     } catch (cleanupError) { if (cleanupError?.code !== "ENOENT") cleanup.push(cleanupError); }
-    if (cleanup.length) throw new AggregateError([error, ...cleanup], "demo token creation and cleanup failed", { cause: error });
+    if (cleanup.length) throw new AggregateError([error, ...cleanup], "fixture token creation and cleanup failed", { cause: error });
     throw error;
   }
 }
@@ -353,31 +354,31 @@ async function writePrivate(path, value) {
 
 async function removeToken(tokenRecord) {
   const info = await lstat(tokenRecord.path);
-  if (!info.isFile() || info.isSymbolicLink() || info.dev !== tokenRecord.dev || info.ino !== tokenRecord.ino) throw new Error("refusing to remove a replaced demo token file");
+  if (!info.isFile() || info.isSymbolicLink() || info.dev !== tokenRecord.dev || info.ino !== tokenRecord.ino) throw new Error("refusing to remove a replaced fixture token file");
   await rm(tokenRecord.path);
   tokenRecord.token = "";
 }
 
 async function identifyDirectory(path) {
   const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("demo temporary root is not a private directory");
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("fixture temporary root is not a private directory");
   return { dev: info.dev, ino: info.ino };
 }
 
 async function removeOwnedTemp(parent, identity, cleanup, preserve = false) {
   const base = resolve(tmpdir());
   const path = resolve(parent);
-  if (!path.startsWith(`${base}${sep}`)) { cleanup.push(new Error("refusing to remove unowned demo state")); return; }
+  if (!path.startsWith(`${base}${sep}`)) { cleanup.push(new Error("refusing to remove unowned fixture state")); return; }
   if (preserve) return;
   try {
     const current = await lstat(parent);
-    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino) throw new Error("refusing to remove a replaced demo root");
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== identity.dev || current.ino !== identity.ino) throw new Error("refusing to remove a replaced fixture root");
     await rm(parent, { recursive: true });
   } catch (error) { cleanup.push(error); }
 }
 
 function installSignals(controller) {
-  const signal = () => controller.abort(new Error("demo interrupted"));
+  const signal = () => controller.abort(new Error("fixture interrupted"));
   process.once("SIGINT", signal);
   process.once("SIGTERM", signal);
   return { remove: () => { process.removeListener("SIGINT", signal); process.removeListener("SIGTERM", signal); } };
@@ -394,7 +395,7 @@ function finishCleanup(cleanup, failure) {
     process.stderr.write(`cleanup after primary failure: ${cleanup.map(safeMessage).join("; ")}\n`);
     return;
   }
-  throw new AggregateError(cleanup, "demo cleanup failed");
+  throw new AggregateError(cleanup, "fixture cleanup failed");
 }
 
 function safeMessage(error) {

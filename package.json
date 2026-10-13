@@ -16,7 +16,7 @@
       "import": "./src/index.mjs"
     },
     "./opencode-plugin": {
-      "import": "./src/adapters/opencode-plugin.mjs"
+      "import": "./src/adapters/index.mjs"
     }
   },
   "files": [
@@ -26,9 +26,7 @@
   ],
   "scripts": {
     "check": "node scripts/check.mjs",
-    "test": "node --test \"tests/*.test.mjs\"",
-    "demo": "node scripts/demo.mjs",
-    "capture": "node scripts/capture.mjs"
+    "test": "node --test \"tests/*.test.mjs\""
   },
   "devDependencies": {
     "typescript": "5.9.3"

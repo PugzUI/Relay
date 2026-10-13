@@ -102,7 +102,7 @@ case.
 | D23 | Shutdown/cancellation | Owned timers/feeds/handles stop; accepted-but-unconfirmed input remains uncertain; existing sessions and unowned processes are untouched. | Pending |
 | D24 | Retention/privacy/output | Cleanup preserves unresolved coordination and pending work; bounded notices/logs/captures contain no payload, token, session handle, private path, or terminal-control injection. | Pending |
 | D25 | Native support matrix | Every enabled client has exact version/surface evidence for required capabilities; synthetic adapter success is not promoted to native qualification. | Pending |
-| D26 | Clean-checkout documentation | Actual release commands and a recorded synthetic example reproduce documented behavior; no planned command is presented as implemented and no unsupported platform/network claim is added. | Pending |
+| D26 | Clean-checkout documentation | Actual release commands and a recorded message/claim/acknowledgement workflow reproduce documented behavior; no planned command is presented as implemented and no unsupported platform/network claim is added. Public demos are not a readiness gate. | Pending |
 
 For D03, D04, and D25, retain both native session/turn observations and Relay
 admission/claim/ack observations privately during qualification; publish only

@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { callOpenCodeBridge } from "./opencode-bridge.mjs";
 
-const SUPPORTED_VERSION = "2.0.26";
+const SUPPORTED_VERSION = "2.0.27";
 const WORKER = /^[A-Za-z0-9._-]{1,63}:[A-Za-z0-9._-]{1,32}:(?:prime|[0-9]{3,32})$/;
 const NATIVE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-const SESSION_READ_MS = 3000;
-const NATIVE_CALL_MS = 8000;
+// Leave transport time inside the bridge's 2500 ms command deadline.
+const SESSION_READ_MS = 1000;
+const NATIVE_CALL_MS = 2000;
 const MESSAGE_SCAN_LIMIT = 4096;
+const EXECUTION_ENDED = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
 
 function exact(value, keys) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -45,11 +47,21 @@ async function dispose(value) {
 
 async function withNativeDeadline(parentSignal, timeoutMs, operation) {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  let rejectAbort;
+  const cancelled = new Promise((_, reject) => { rejectAbort = reject; });
+  const abort = () => {
+    controller.abort();
+    rejectAbort(controller.signal.reason);
+  };
   parentSignal.addEventListener("abort", abort, { once: true });
   if (parentSignal.aborted) controller.abort();
   const timer = setTimeout(abort, timeoutMs);
-  try { return await operation(controller.signal); }
+  try {
+    return await Promise.race([cancelled, Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      return operation(controller.signal);
+    })]);
+  }
   finally {
     clearTimeout(timer);
     parentSignal.removeEventListener("abort", abort);
@@ -82,8 +94,10 @@ export function createOpenCodePlugin() {
       if (!targetInfo || targetInfo.id !== options.nativeSession) return;
 
       const attempts = new Map();
+      let contextAttempts = new Set();
       const lifecycle = new AbortController();
       const eventLifecycle = new AbortController();
+      const nativeReads = new Map();
       const bindingIds = [];
       let stopPromise = null;
       let contextHook;
@@ -98,29 +112,48 @@ export function createOpenCodePlugin() {
       });
       const capabilities = Object.freeze({ context: true, idle: true, launch: false });
 
-      const report = async (attemptId, entry) => {
-        if (!bindingIds.length || lifecycle.signal.aborted) return;
-        await callOpenCodeBridge(options.relayRoot, "delivery.observe", {
-          bindingId: bindingIds[0],
-          attemptId,
-          observation: { state: entry.state, nativeRequestId: entry.nativeRequestId },
-        }, lifecycle.signal);
+      // The native SDK can ignore abort. Reuse pending reads instead of leaking one per poll.
+      const readNative = (method) => {
+        if (nativeReads.has(method)) return nativeReads.get(method);
+        const pending = Promise.resolve().then(() => ctx.session[method]({ sessionID: options.nativeSession }, { signal: lifecycle.signal }));
+        nativeReads.set(method, pending);
+        const clear = () => { if (nativeReads.get(method) === pending) nativeReads.delete(method); };
+        void pending.then(clear, clear);
+        return pending;
+      };
+
+      const report = (attemptId, entry) => {
+        const observation = { state: entry.state, nativeRequestId: entry.nativeRequestId };
+        entry.reportQueue = (entry.reportQueue ?? Promise.resolve()).then(async () => {
+          if (!bindingIds.length || lifecycle.signal.aborted) return;
+          await callOpenCodeBridge(options.relayRoot, "delivery.observe", {
+            bindingId: bindingIds[0], attemptId, observation,
+          }, lifecycle.signal);
+        });
+        return entry.reportQueue;
       };
 
       const onContext = (event) => {
+        if (event?.sessionID !== options.nativeSession) return;
+        contextAttempts.clear();
         const messageIds = currentMessageIds(event, options.nativeSession);
         if (!messageIds) return;
         for (const [attemptId, entry] of attempts) {
-          if (entry.state !== "unknown" || !messageIds.has(entry.nativeRequestId)) continue;
-          entry.state = "context_observed";
-          void report(attemptId, entry).catch(() => { void stop(); });
+          if (!messageIds.has(entry.nativeRequestId)) continue;
+          if (entry.state === "unknown") {
+            entry.state = "context_observed";
+            void report(attemptId, entry).catch(() => { void stop(); });
+          }
+          if (entry.state === "context_observed") contextAttempts.add(attemptId);
         }
       };
       const onModelRequest = (event) => {
-        const messageIds = currentMessageIds(event, options.nativeSession);
-        if (!messageIds) return;
-        for (const [attemptId, entry] of attempts) {
-          if (entry.state !== "context_observed" || !messageIds.has(entry.nativeRequestId)) continue;
+        if (event?.sessionID !== options.nativeSession || event.kind !== "primary") return;
+        const currentContext = contextAttempts;
+        contextAttempts = new Set();
+        for (const attemptId of currentContext) {
+          const entry = attempts.get(attemptId);
+          if (!entry || entry.state !== "context_observed") continue;
           entry.state = "turn_started";
           void report(attemptId, entry).catch(() => { void stop(); });
         }
@@ -152,17 +185,17 @@ export function createOpenCodePlugin() {
         if (command.method === "status") {
           try {
             const session = await withNativeDeadline(lifecycle.signal, SESSION_READ_MS,
-              (signal) => ctx.session.get({ sessionID: options.nativeSession }, { signal }));
+              () => readNative("get"));
             if (!session || session.id !== options.nativeSession) return { state: "unknown" };
-            const waitAbort = new AbortController();
-            const timer = setTimeout(() => waitAbort.abort(), 200);
+            let waitSignal;
             try {
-              await ctx.session.wait({ sessionID: options.nativeSession }, { signal: waitAbort.signal });
+              await withNativeDeadline(lifecycle.signal, 200, (signal) => {
+                waitSignal = signal;
+                return readNative("wait");
+              });
               return { state: "idle" };
             } catch {
-              return { state: waitAbort.signal.aborted ? "busy" : "unknown" };
-            } finally {
-              clearTimeout(timer);
+              return { state: waitSignal?.aborted && !lifecycle.signal.aborted ? "busy" : "unknown" };
             }
           } catch {
             return { state: "unknown" };
@@ -170,7 +203,7 @@ export function createOpenCodePlugin() {
         }
         if (command.method === "submit") {
           const input = command.args;
-          if (!input || typeof input.attemptId !== "string" || !input.notice || typeof input.notice.text !== "string" || Buffer.byteLength(input.notice.text, "utf8") > 4096) throw new Error("Invalid Relay notice");
+          if (!input || typeof input.attemptId !== "string" || typeof input.notice !== "string" || !input.notice || Buffer.byteLength(input.notice, "utf8") > 4096) throw new Error("Invalid Relay notice");
           if (attempts.size >= 128) return { accepted: false, state: "held" };
           const nativeRequestId = generatedMessageId(input.attemptId);
           const entry = { nativeRequestId, state: "unknown" };
@@ -178,7 +211,7 @@ export function createOpenCodePlugin() {
           const accepted = await withNativeDeadline(lifecycle.signal, NATIVE_CALL_MS, (signal) => ctx.session.prompt({
             sessionID: options.nativeSession,
             id: nativeRequestId,
-            text: input.notice.text,
+            text: input.notice,
             delivery: "queue",
             resume: true,
           }, { signal }));
@@ -197,6 +230,8 @@ export function createOpenCodePlugin() {
           await dispose(modelHook).catch(() => {});
           for (const bindingId of bindingIds) await callOpenCodeBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
           attempts.clear();
+          contextAttempts.clear();
+          nativeReads.clear();
         })();
         return stopPromise;
       }
@@ -220,12 +255,20 @@ export function createOpenCodePlugin() {
       eventLoop = (async () => {
         try {
           for await (const event of ctx.event.subscribe({ signal: eventLifecycle.signal })) {
-            if (event?.type !== "session.status" || event.properties?.sessionID !== options.nativeSession || event.properties.status?.type !== "idle") continue;
+            if (!EXECUTION_ENDED.has(event?.type) || event.data?.sessionID !== options.nativeSession) continue;
             for (const [attemptId, entry] of attempts) {
-              if (entry.state !== "turn_started") continue;
-              entry.state = "safe_idle";
-              await report(attemptId, entry);
-              attempts.delete(attemptId);
+              if (entry.state !== "turn_started" || entry.waitingForIdle) continue;
+              // Passive idle confirmation must outlive command deadlines without blocking the event feed.
+              entry.waitingForIdle = true;
+              void readNative("wait").then(async () => {
+                entry.waitingForIdle = false;
+                if (eventLifecycle.signal.aborted || attempts.get(attemptId) !== entry || entry.state !== "turn_started") return;
+                entry.state = "safe_idle";
+                await report(attemptId, entry);
+                attempts.delete(attemptId);
+              }, () => {
+                entry.waitingForIdle = false;
+              }).catch(() => { void stop(); });
             }
           }
         } catch {

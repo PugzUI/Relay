@@ -1,12 +1,11 @@
-import { access, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const project = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const output = resolve(project, "docs/media");
+const project = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const ui = resolve(project, "ui/index.html");
 const timeoutMs = 30_000;
 const maxProtocolBytes = 1_048_576;
@@ -145,7 +144,7 @@ async function capture() {
 
     const views = [
       { name: "topology.png", width: 1440, height: 1000, mobile: false, scroll: false },
-      { name: "readme.png", width: 1000, height: 900, mobile: false, scroll: false },
+      { name: "topology-medium.png", width: 1000, height: 900, mobile: false, scroll: false },
       { name: "topology-narrow.png", width: 390, height: 844, mobile: true, scroll: false },
       { name: "board-narrow.png", width: 390, height: 1200, mobile: true, scroll: true },
     ];
@@ -229,12 +228,18 @@ async function capture() {
       keyboardFocus: "visible outline verified on a real control",
     };
     await writeFile(join(staging, "capture.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    await mkdir(output, { recursive: true });
+    const output = await mkdtemp(join(tmpdir(), "relay-ui-evidence-"));
     const filenames = [...views.map((view) => view.name), "capture.json"];
-    for (const name of filenames) {
-      await rename(join(staging, name), join(output, name));
+    try {
+      for (const name of filenames) {
+        await rename(join(staging, name), join(output, name));
+      }
+    } catch (error) {
+      try { await rm(output, { recursive: true, force: true }); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "capture evidence write and cleanup failed", { cause: error }); }
+      throw error;
     }
-    process.stdout.write(`${JSON.stringify({ files: filenames.map((name) => `docs/media/${name}`), browser: version, runtime: process.version })}\n`);
+    process.stdout.write(`${JSON.stringify({ files: filenames.map((name) => join(output, name)), browser: version, runtime: process.version })}\n`);
   } catch (error) {
     failure = error;
     throw error;
