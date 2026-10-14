@@ -1,6 +1,6 @@
 # Relay
 
-Relay is the standalone project at `PugzUI/Relay`. Read the supplied PRD and the frozen implementation contract before coding.
+Relay is the standalone project at `PugzUI/Relay`. Read the supplied PRD and implementation contract before coding. The owner lifted the initial UI framework freeze; the functional overview uses locally bundled Lit Web Components, native SVG, and CSS.
 
 ## Product scope
 
@@ -19,8 +19,8 @@ The owner requested the complete project and explicitly authorized all project c
 - The private planning PRD is supplied separately. Public documentation must not include private donor paths, source revisions, real homelab addresses or session IDs.
 - Use the current project name Relay. Keep `init` as immutable creation time in UTC epoch milliseconds, never a readiness flag.
 - The scope includes local and authenticated remote relays, enrolled device-qualified workers, central bounty and local boards, bounded local pool/prime launch, and one live topology page with `Inbox | Bounties` panes.
-- Explicit msg/work envelopes; no message-text classification. No queue replication, peer mesh, DAG scheduler, arbitrary remote execution, React, dashboard framework or second state engine.
-- Flat black/neutral surfaces, readable white/light-grey type, lime activity, sharp zero-radius corners, no nested cards. Native browser modules and SVG/CSS. No subtitle, lead, hero caption, sales prose, badge wall or invented traffic. Only operational labels and real committed state. Presentation copy remains owner-controlled; omit unsupplied marketing slots from the release rather than inventing them.
+- Explicit msg/work envelopes; no message-text classification. No queue replication, peer mesh, DAG scheduler, arbitrary remote execution, React, prebuilt dashboard kit or second state engine. Lit owns rendering only; the existing controller and validated Relay state remain authoritative.
+- Flat black/neutral surfaces, readable white/light-grey type, lime activity, sharp zero-radius corners, no nested cards. Native browser modules, light-DOM Lit components, and SVG/CSS. Ship the browser bundle locally with no CDN or added Node runtime dependencies, and keep the strict CSP. No subtitle, lead, hero caption, sales prose, badge wall or invented traffic. Only operational labels and real committed state. Presentation copy remains owner-controlled; omit unsupplied marketing slots from the release rather than inventing them.
 - Credentialed requests use fixed destinations, strict argument validation, bounded resources and correct permission checks. No redirected credentials, bearer secrets in argv/URLs, shell interpolation of work payloads, or unbounded logs.
 - Implement failure paths and cleanup. Keep application mutations and RPC journal commit atomic. Historical receipts are not current execution authority.
 - No fabricated output or unsupported cross-platform/network qualification claims.

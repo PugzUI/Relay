@@ -34,7 +34,7 @@ export async function uiRuntime(fetch) {
     fetch, URL, AbortController, DOMException, TextDecoder, TextEncoder, Uint8Array, JSON,
     setTimeout, clearTimeout,
   });
-  runInContext(source.replace(imports, ""), context);
+  runInContext(source.replace(imports, "").replace('import "/assets/console.mjs";', ""), context);
   const run = (expression) => runInContext(expression, context);
   return {
     run, document, element: (id) => document.getElementById(id),

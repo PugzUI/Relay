@@ -25,10 +25,14 @@
     "LICENSE"
   ],
   "scripts": {
+    "build:ui": "node scripts/build-ui.mjs",
+    "prepack": "npm run build:ui",
     "check": "node scripts/check.mjs",
     "test": "node --test \"tests/*.test.mjs\""
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
+    "lit": "3.3.3",
     "typescript": "5.9.3"
   }
 }

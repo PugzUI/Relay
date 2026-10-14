@@ -1,6 +1,8 @@
 # Relay implementation contract
 
-This is the frozen cross-lane contract for the first implementation. JavaScript
+This is the cross-lane contract for Relay. The owner lifted the initial UI
+freeze for the functional overview; storage, protocol and permission boundaries
+remain unchanged. JavaScript
 files use ESM and JSDoc; `src/index.d.ts` is the consumer API. Do not invent a
 second queue, transaction owner, wire protocol, CLI state machine, cursor kind,
 or permission model. Any necessary interface change must be agreed by affected
@@ -10,11 +12,17 @@ owners and updated here before implementation diverges.
 
 - Project/package name: `Relay` / `@pugzui/relay`, version `0.1.0`. This is a
   package identity, not a claim that the name is available or published.
-- Runtime: JavaScript ESM, Node `>=24.0.0`; runtime dependencies: none.
-  TypeScript is a development-only dependency for declaration checking.
+- Runtime: JavaScript ESM, Node `>=24.0.0`; Node runtime dependencies: none.
+  TypeScript checks consumer declarations; Lit and esbuild are development
+  dependencies used to produce the packaged browser view bundle.
 - Storage and transport use Node native `node:sqlite`, `node:http`,
   `node:https`, `node:crypto`, and `node:child_process`; the UI uses browser
-  modules, SVG, and CSS.
+  modules, light-DOM Lit Web Components, native SVG, and external CSS.
+  Lit owns rendering only. The existing controller owns authenticated requests,
+  validated snapshots, selection, board pages and committed-event pulses.
+  Ship the deterministic bundle and third-party licenses under `ui/assets/`;
+  no CDN, private framework, browser package resolver, additional wire protocol,
+  inline styles, `unsafe-eval`, or second store is required at runtime.
 - Public spelling is `Relay`. `init` always means immutable record creation
   time in UTC epoch milliseconds.
 - Relay is standalone. Executor, MCP, the private framework, and AI Intercom

@@ -37,6 +37,9 @@ async function filesUnder(directory) {
 const sourceFiles = (await Promise.all(["src", "scripts", "examples", "ui"].map(filesUnder)))
   .flat()
   .filter((path) => path.endsWith(".mjs") || path.endsWith(".js"));
+const uiBuild = run(process.execPath, ["scripts/build-ui.mjs", "--check"]);
+if (uiBuild.status !== 0) failures.push(`ui bundle: ${uiBuild.stderr.trim()}`);
+else console.log(uiBuild.stdout.trim());
 for (const path of sourceFiles) {
   const result = run(process.execPath, ["--check", path]);
   if (result.status !== 0) failures.push(`syntax: ${path}\n${result.stderr.trim()}`);
@@ -166,6 +169,7 @@ try {
         failures.push(`packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`);
       }
       const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts", "src/adapters/package.json",
+        "ui/index.html", "ui/main.mjs", "ui/state.mjs", "ui/style.css", "ui/assets/console.mjs", "ui/assets/licenses.txt",
         "src/adapters/index.mjs", "src/adapters/opencode-plugin-core.mjs", "src/adapters/opencode-bridge.mjs",
         ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
       const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));

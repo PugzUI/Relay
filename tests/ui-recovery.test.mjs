@@ -44,6 +44,9 @@ async function withSnapshotBroker(run) {
       const session = await client.join(worker);
       await run({ origin, token: viewer.token, client, session,
         revokeViewer: () => privateFile(credentialsFile, JSON.stringify({ version: 1, credentials: [writer.entry] })),
+        setViewerGrant: (grant) => privateFile(credentialsFile, JSON.stringify({ version: 1, credentials: [
+          { ...viewer.entry, grant: { ...viewer.entry.grant, ...grant } }, writer.entry,
+        ] })),
       });
     } finally {
       await client?.close();
@@ -51,6 +54,237 @@ async function withSnapshotBroker(run) {
     }
   });
 }
+
+test("superseded pane cancellation cannot clear a newer request's loading state", async () => {
+  const ui = await uiRuntime((_path, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+  }));
+  let newer;
+  try {
+    ui.run("state.token = 'a'.repeat(43); state.selectedBoard = 'bounty'; state.snapshot = { boards: [{ id: 'bounty', reported: false, authority: 'probe' }] }");
+    const older = ui.run("loadPane('inbox', null)");
+    newer = ui.run("loadPane('inbox', null)");
+    await older;
+    assert.equal(ui.run("state.inbox.loading"), true);
+    assert.equal(ui.element("inbox-status").textContent, "Loading");
+  } finally { await ui.close(); await newer; }
+});
+
+test("superseded pane refusal cannot deny a newer request", async () => {
+  let release, newer, requests = 0;
+  const held = new Promise(resolve => { release = resolve; });
+  const ui = await uiRuntime(async (_path, { signal }) => {
+    if (++requests === 1) {
+      await held;
+      return Response.json({ v: 1, fault: { code: "denied" } }, { status: 403 });
+    }
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+    });
+  });
+  try {
+    ui.run("state.token = 'a'.repeat(43); state.selectedBoard = 'bounty'; state.snapshot = { boards: [{ id: 'bounty', reported: false, authority: 'probe' }] }");
+    const older = ui.run("loadPane('inbox', null)");
+    newer = ui.run("loadPane('inbox', null)");
+    release();
+    await older;
+    assert.equal(ui.run("state.inbox.error"), null);
+    assert.equal(ui.run("state.inbox.loading"), true);
+    assert.equal(ui.element("inbox-status").textContent, "Loading");
+  } finally { release(); await ui.close(); await newer; }
+});
+
+test("completed pane requests release their controller references", async () => {
+  const ui = await uiRuntime(async () => Response.json({ v: 1 }));
+  try {
+    ui.run("state.token = 'a'.repeat(43)");
+    await ui.run("requestJson('/v1/board', { pane: 'inbox' })");
+    assert.equal(ui.run("requestControllers.size"), 0);
+    assert.equal(ui.run("paneControllers.size"), 0);
+  } finally { await ui.close(); }
+});
+
+test("unchanged connection status preserves already rendered board rows", async () => {
+  const ui = await uiRuntime(() => { throw new Error("No request expected"); });
+  try {
+    ui.run("state.selectedBoard = 'bounty'; state.inbox.page = { items: [{ id: 'message', state: 'posted', seq: 1, init: 0, data: { msg: 'retained text' } }], visible: 1, total: 1, complete: true, pruned: 0 }; setConnection('connected', 'Connected')");
+    const row = ui.element("inbox-rows").children[0];
+    assert.ok(row);
+    ui.run("setConnection('connected', 'Connected')");
+    assert.equal(ui.element("inbox-rows").children[0], row);
+    ui.run("setConnection('disconnected', 'Reconnecting')");
+    assert.equal(ui.element("inbox-status").textContent, "Reconnecting · cached");
+    ui.run("selectBoard(state, null); setConnection('disconnected', 'Reconnecting')");
+    assert.equal(ui.element("inbox-rows").children.length, 0);
+  } finally { await ui.close(); }
+});
+
+test("hiding the page cancels pending body reads and clears their loading state", async () => {
+  let signal, pending;
+  const ui = await uiRuntime((_path, options) => {
+    signal = options.signal;
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true }));
+  });
+  try {
+    ui.run("state.token = 'a'.repeat(43); state.selectedBoard = 'bounty'; state.snapshot = { authority: 'probe', time: 0, boards: [{ id: 'bounty', reported: false, authority: 'probe' }], devices: [], agents: [], links: [], totals: { devices: 0, agents: 0, boards: 1, links: 0 }, visible: { devices: 0, agents: 0, boards: 1, links: 0 } }");
+    pending = ui.run("loadPane('inbox', null)");
+    ui.document.hidden = true;
+    ui.document.dispatchEvent(new Event("visibilitychange"));
+    assert.equal(signal.aborted, true);
+    await pending;
+    assert.equal(ui.run("state.inbox.loading"), false);
+    assert.equal(ui.element("connection").textContent, "Paused");
+    assert.equal(ui.run("paneControllers.size"), 0);
+  } finally { await ui.close(); await pending; }
+});
+
+test("a refused feed cancels its unread response body before clearing credentials", async () => {
+  let cancelled = false, task;
+  const ui = await uiRuntime(async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 401 }));
+  try {
+    task = ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream(); streamTask");
+    await task;
+    assert.equal(cancelled, true);
+    assert.equal(ui.element("connection").textContent, "Authentication required");
+    assert.equal(ui.run("state.token"), null);
+  } finally { await ui.close(); await task; }
+});
+
+test("a stopped feed cannot restore Connected from a late response", async () => {
+  let release, task, cancelled = false;
+  const held = new Promise((resolve) => { release = resolve; });
+  const ui = await uiRuntime(() => held);
+  try {
+    ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream()");
+    task = ui.run("streamTask");
+    ui.run("clearPrivateState(); setConnection('disconnected', 'Disconnected')");
+    release(new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-type": "text/event-stream" } }));
+    await task;
+    assert.equal(ui.element("connection").textContent, "Disconnected");
+    assert.equal(ui.run("state.snapshot"), null);
+    assert.equal(cancelled, true);
+  } finally { release(new Response(null)); await ui.close(); await task; }
+});
+
+test("Disconnect cancels feed backoff without waiting for the retry timer", async () => {
+  let closed, settled = false;
+  const ui = await uiRuntime(async () => new Response(null, { status: 503 }));
+  try {
+    await ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream()");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(ui.element("connection").textContent, "Reconnecting");
+    closed = ui.close().then(() => { settled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true);
+  } finally { await (closed ?? ui.close()); }
+});
+
+test("a stalled feed handshake times out without skipping reconnect backoff", async () => {
+  let feeds = 0;
+  const ui = await uiRuntime((_path, { signal }) => {
+    feeds += 1;
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true }));
+  });
+  try {
+    ui.run("const nativeTimeout = setTimeout; setTimeout = (callback, ms) => nativeTimeout(callback, ms === REQUEST_DEADLINE_MS ? 0 : ms)");
+    await ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream()");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(ui.element("connection").textContent, "Timed out · reconnecting");
+    assert.equal(feeds, 1);
+    assert.equal(ui.run("streamController.signal.aborted"), false);
+  } finally { await ui.close(); }
+});
+
+test("a failed manual refresh does not open a feed from cached topology", async () => {
+  const requests = [];
+  const ui = await uiRuntime(async (path) => {
+    requests.push(new URL(path, "http://127.0.0.1").pathname);
+    return Response.json({ v: 1, fault: { code: "unavailable" } }, { status: 503 });
+  });
+  try {
+    ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }");
+    ui.element("refresh").dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(requests, ["/v1/topology"]);
+    assert.equal(ui.element("connection").textContent, "Unavailable");
+    assert.notEqual(ui.run("state.snapshot"), null);
+    assert.equal(ui.run("streamTask"), null);
+  } finally { await ui.close(); }
+});
+
+test("feed reconnect waits for a successful topology refresh instead of reusing cached authority", async () => {
+  let checked, feeds = 0;
+  const topologyRead = new Promise((resolve) => { checked = resolve; });
+  const ui = await uiRuntime(async (path) => {
+    if (new URL(path, "http://127.0.0.1").pathname === "/v1/topology") {
+      checked();
+      return new Response(null, { status: 503 });
+    }
+    feeds += 1;
+    return new Response(new ReadableStream({ start(stream) { stream.close(); } }), { headers: { "content-type": "text/event-stream" } });
+  });
+  try {
+    await ui.run("state.token = 'a'.repeat(43); state.snapshot = { cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream()");
+    await topologyRead;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(feeds, 1);
+    assert.equal(ui.element("connection").textContent, "Unavailable");
+  } finally { await ui.close(); }
+});
+
+test("a replacement snapshot authority retires a feed that has not closed yet", async () => {
+  await withSnapshotBroker(async ({ origin, token }) => {
+    const feeds = [];
+    let old;
+    const ui = await uiRuntime(async (path, options) => {
+      if (new URL(path, origin).pathname === "/v1/events") {
+        feeds.push(options.signal);
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return fetch(new URL(path, origin), options);
+    });
+    try {
+      ui.element("token").value = token;
+      ui.run(`state.token = ${JSON.stringify(token)}; state.snapshot = { authority: 'previous', cursor: 'probe', boards: [], agents: [], devices: [], links: [] }; connectStream()`);
+      old = ui.run("streamTask");
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(feeds.length, 1);
+      assert.equal(await ui.run("refreshSnapshot()"), true);
+      assert.equal(feeds[0].aborted, true);
+      assert.equal(feeds.length, 2);
+      assert.equal(feeds[1].aborted, false);
+      await old;
+    } finally { await ui.close(); await old; }
+  });
+});
+
+test("a changed credential scope retires the old feed and clears previously permitted bodies", async () => {
+  await withSnapshotBroker(async ({ origin, token, client, session, setViewerGrant }) => {
+    const feeds = [];
+    const ui = await uiRuntime(async (path, options) => {
+      if (new URL(path, origin).pathname === "/v1/events") {
+        feeds.push(options.signal);
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return fetch(new URL(path, origin), options);
+    });
+    try {
+      await client.post(session.id, "bounty", { msg: "previously permitted body" });
+      ui.element("token").value = token;
+      await ui.run("connect()");
+      await ui.run("loadPane('inbox', null)");
+      assert.equal(ui.run("state.inbox.page.items.length"), 1);
+      assert.equal(feeds.length, 1);
+      await setViewerGrant({ inboxRead: [], workRead: [] });
+      assert.equal(await ui.run("refreshSnapshot()"), true);
+      assert.equal(feeds[0].aborted, true);
+      assert.equal(feeds.length, 2);
+      assert.equal(ui.run("state.inbox.page"), null);
+      assert.equal(ui.run("state.bounties.page"), null);
+      assert.equal(ui.run("state.token"), token);
+    } finally { await ui.close(); }
+  });
+});
 
 test("native topology continuations with no links satisfy the authenticated cursor contract", async () => {
   await withSnapshotBroker(async ({ origin, token }) => {
@@ -95,6 +329,28 @@ test("initial UI snapshot restarts after a native pagination reset and connects 
       assert.equal(ui.run("state.snapshot.boards.find(board => board.id === 'bounty').inbox"), 1);
       assert.deepEqual(requests.map(request => request.continuation), [false, true, false, true]);
       assert.ok(ui.run("streamTask"));
+    } finally { await ui.close(); }
+  });
+});
+
+test("successful snapshot recovery starts the native feed without another Connect", async () => {
+  await withSnapshotBroker(async ({ origin, token }) => {
+    let unavailable = true, feeds = 0;
+    const ui = await uiRuntime(async (path, options) => {
+      const url = new URL(path, origin);
+      if (url.pathname === "/v1/topology" && unavailable) return new Response(null, { status: 503 });
+      if (url.pathname === "/v1/events") feeds += 1;
+      return fetch(url, options);
+    });
+    try {
+      ui.element("token").value = token;
+      await ui.run("connect()");
+      assert.equal(ui.run("streamTask"), null);
+      unavailable = false;
+      assert.equal(await ui.run("refreshSnapshot()"), true);
+      assert.equal(ui.element("connection").textContent, "Connected");
+      assert.equal(feeds, 1);
+      assert.notEqual(ui.run("streamTask"), null);
     } finally { await ui.close(); }
   });
 });

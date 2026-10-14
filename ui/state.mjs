@@ -95,6 +95,11 @@ function feedCursor(token) {
   return value;
 }
 
+export function sameFeedBoundary(left, right) {
+  const a = feedCursor(left), b = feedCursor(right);
+  return a.authority === b.authority && a.stream === b.stream && a.scope === b.scope;
+}
+
 function messageCursor(token) {
   const value = decodeCursor(token, 1024, ["v", "authority", "scope", "filter", "boundary", "last"], "message cursor");
   if (!/^[a-f0-9]{64}$/.test(value.filter)) throw new TypeError("message cursor.filter: invalid hash");
@@ -266,6 +271,10 @@ export async function consumeSseBody(body, signal, onFrame) {
   let data = [];
   let bytes = 0;
   let failure;
+  let cancellation;
+  const abort = () => { cancellation = reader.cancel().catch((error) => { failure ??= error; }); };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
   const dispatch = () => {
     if (!data.length) { event = "message"; bytes = 0; return; }
     const frame = parseFeedFrame(event, JSON.parse(data.join("\n")));
@@ -290,15 +299,15 @@ export async function consumeSseBody(body, signal, onFrame) {
   try {
     while (!signal.aborted) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done || signal.aborted) break;
       buffer += decoder.decode(value, { stream: true });
       let newline;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
+      while (!signal.aborted && (newline = buffer.indexOf("\n")) >= 0) {
         const current = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         line(current);
       }
-      if (bytes + encoder.encode(buffer).byteLength > 16_384) throw new Error("Event frame limit exceeded");
+      if (!signal.aborted && bytes + encoder.encode(buffer).byteLength > 16_384) throw new Error("Event frame limit exceeded");
     }
     if (!signal.aborted) {
       buffer += decoder.decode();
@@ -308,8 +317,9 @@ export async function consumeSseBody(body, signal, onFrame) {
   } catch (error) {
     failure = error;
   }
+  signal.removeEventListener("abort", abort);
   try {
-    await reader.cancel();
+    await (cancellation ?? reader.cancel());
   } catch (error) {
     if (!failure) failure = error;
   }

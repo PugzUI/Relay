@@ -8,8 +8,10 @@ import {
   mergeSnapshotPages,
   parseBoardPage,
   parseSnapshot,
+  sameFeedBoundary,
   selectBoard,
 } from "/state.mjs";
+import "/assets/console.mjs";
 
 const PAGE_SIZE = 50;
 const MAX_RESPONSE_BYTES = 1_048_576;
@@ -33,8 +35,7 @@ let pageHidden = document.hidden;
 let refreshTimer = null;
 let paneRefreshTimer = null;
 let pulseTimer = null;
-let resizeFallbackInstalled = false;
-let resizeObserver = null;
+let freshnessTimer = null;
 
 function node(tag, className, value) {
   const element = document.createElement(tag);
@@ -65,13 +66,21 @@ function requestController(pane) {
 }
 
 function setConnection(value, label) {
+  const changed = state.connection !== value || connectionNode.textContent !== label;
   state.connection = value;
   connectionNode.dataset.state = value;
   connectionNode.textContent = label;
-  statusNode.textContent = label;
+  statusNode.textContent = `${label}${state.snapshot && value !== "connected" ? " · cached" : ""}`;
   statusNode.dataset.state = value === "error" ? "error" : "";
-  renderPane("inbox");
-  renderPane("bounties");
+  byId("auth-form").dataset.authenticated = String(Boolean(state.token));
+  byId("disconnect").disabled = !state.token;
+  byId("refresh").disabled = !state.token;
+  byId("expand-all").disabled = !state.snapshot;
+  renderViews();
+  if (changed || !state.selectedBoard) {
+    renderPane("inbox");
+    renderPane("bounties");
+  }
 }
 
 function safeHttpError(status) {
@@ -111,12 +120,17 @@ async function readBounded(response, controller) {
 
 function clearPrivateState() {
   clearPrivateUiState(state);
+  clearTimeout(refreshTimer);
   clearTimeout(pulseTimer);
   clearTimeout(paneRefreshTimer);
+  clearTimeout(freshnessTimer);
   stopStream();
   abortRequests();
   metaNode.textContent = "";
-  topologyNode.replaceChildren();
+  metaNode.title = "";
+  byId("node-filter").value = "";
+  topologyNode.query = "";
+  renderViews();
   boardPicker.replaceChildren();
   boardPicker.disabled = true;
   clearPane("inbox");
@@ -183,6 +197,7 @@ async function requestJson(path, { signal, pane } = {}) {
     clearTimeout(timer);
     if (signal && abortListener) signal.removeEventListener("abort", abortListener);
     requestControllers.delete(controller);
+    if (paneControllers.get(pane) === controller) paneControllers.delete(pane);
   }
 }
 
@@ -208,144 +223,51 @@ async function loadSnapshot(signal) {
   }
 }
 
-function boardAge(board, now) {
-  if (!board.reported) return "local";
-  if (board.receivedAt === null) return "age unknown · stale";
-  const age = now - board.receivedAt;
-  if (age < 0) return "age unknown · stale";
-  const seconds = Math.floor(age / 1000);
-  return `${seconds}s${board.reported && age <= 30_000 ? "" : " · stale"}`;
-}
-
 function timeLabel(time) {
   const date = new Date(time);
   return Number.isFinite(date.getTime()) ? date.toISOString() : "time unknown";
 }
 
-function agentStatus(agent) {
-  return agent.state;
-}
-
-function reportAge(receivedAt, now, stale, authority, localAuthority) {
-  if (authority === localAuthority) return "local";
-  if (receivedAt === null || receivedAt > now) return "age unknown · stale";
-  const seconds = Math.floor((now - receivedAt) / 1000);
-  return `${seconds}s${stale || now - receivedAt > 30_000 ? " · stale" : ""}`;
-}
-
-function compareSlot(left, right) {
-  if (left.slot === "prime") return right.slot === "prime" ? 0 : -1;
-  if (right.slot === "prime") return 1;
-  const a = left.slot.replace(/^0+/, "") || "0";
-  const b = right.slot.replace(/^0+/, "") || "0";
-  return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+function renderViews() {
+  const snapshot = state.snapshot;
+  for (const id of ["overview", "topology", "inspector"]) {
+    const view = byId(id);
+    view.snapshot = snapshot;
+    view.connection = state.connection;
+  }
+  topologyNode.selectedBoard = state.selectedBoard;
+  topologyNode.selectedNode = state.selectedNode;
+  topologyNode.pulses = state.pulses;
+  byId("inspector").selection = state.selectedNode;
 }
 
 function drawTopology(snapshot = state.snapshot) {
-  topologyNode.replaceChildren();
+  state.pulses = state.pulses.filter((pulse) => pulse.until > Date.now());
+  const entities = [...(snapshot?.devices ?? []), ...(snapshot?.agents ?? []), ...(snapshot?.boards ?? [])];
+  if (state.selectedNode && !entities.some((row) => row.id === state.selectedNode)) state.selectedNode = null;
+  renderViews();
   if (!snapshot) return;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "topology-svg");
-  svg.setAttribute("aria-hidden", "true");
-  topologyNode.append(svg);
-  const addColumn = (title) => {
-    const column = node("div", "topology-column");
-    column.append(node("h3", "topology-label", title));
-    topologyNode.append(column);
-    return column;
-  };
-  for (const device of snapshot.devices) {
-    const column = addColumn(`Device · ${device.name}`);
-    const deviceButton = node("button", "node");
-    deviceButton.type = "button";
-    deviceButton.dataset.entity = device.id;
-    deviceButton.setAttribute("aria-pressed", String(state.selectedNode === device.id));
-    deviceButton.append(node("span", "node-id", device.id), node("span", "node-state", device.stale ? "stale" : "registered"));
-    const age = device.receivedAt === null ? null : snapshot.time - device.receivedAt;
-    const fresh = device.authority === snapshot.authority || (!device.stale && age !== null && age >= 0 && age <= 30_000);
-    const free = !fresh || device.free === null ? "free unknown" : `free ${device.free}`;
-    const ageLabel = reportAge(device.receivedAt, snapshot.time, device.stale, device.authority, snapshot.authority);
-    deviceButton.append(node("span", "node-detail", `${free} · ${ageLabel} · ${device.authority}`));
-    column.append(deviceButton);
-    for (const agent of snapshot.agents.filter((row) => row.device === device.id).sort(compareSlot)) {
-      const button = node("button", "node");
-      button.type = "button";
-      button.dataset.entity = agent.id;
-      button.setAttribute("aria-pressed", String(state.selectedNode === agent.id));
-      const id = node("span", "node-id", agent.id);
-      if (agent.state === "busy") id.classList.add("node-activity");
-      button.append(id, node("span", "node-state", agentStatus(agent)));
-      button.append(node("span", "node-detail", `caps ${agent.caps.length ? agent.caps.join(", ") : "none"} · assignments ${agent.assignmentCount} · ${reportAge(agent.receivedAt, snapshot.time, agent.state === "stale", device.authority, snapshot.authority)}`));
-      column.append(button);
+  const ids = snapshot.boards.map((board) => board.id);
+  if (JSON.stringify(ids) !== JSON.stringify([...boardPicker.children].map((option) => option.value))) {
+    boardPicker.replaceChildren();
+    for (const board of snapshot.boards) {
+      const option = document.createElement("option");
+      option.value = board.id;
+      option.textContent = board.id;
+      boardPicker.append(option);
     }
   }
-  for (const board of snapshot.boards) {
-    const column = addColumn(board.kind === "bounty" ? "Bounty board" : `Host board · ${board.id}`);
-    const button = node("button", "node");
-    button.type = "button";
-    button.dataset.board = board.id;
-    button.setAttribute("aria-pressed", String(state.selectedBoard === board.id));
-    const reported = board.reported ? "reported" : "local";
-    button.append(node("span", "node-id", board.id), node("span", "node-state", reported));
-    button.append(node("span", "node-detail", `inbox ${board.inbox} · pending ${board.pending} · claimed ${board.claimed} · terminal ${board.terminal} · ${boardAge(board, snapshot.time)}`));
-    button.addEventListener("click", () => chooseBoard(board.id));
-    column.append(button);
-  }
-  topologyNode.querySelectorAll("button[data-entity]").forEach((button) => button.addEventListener("click", () => {
-    state.selectedNode = button.dataset.entity;
-    topologyNode.querySelectorAll("button[data-entity]").forEach((item) => item.setAttribute("aria-pressed", String(item.dataset.entity === state.selectedNode)));
-  }));
-  boardPicker.replaceChildren();
-  for (const board of snapshot.boards) {
-    const option = document.createElement("option");
-    option.value = board.id;
-    option.textContent = board.id;
-    boardPicker.append(option);
-  }
   boardPicker.disabled = snapshot.boards.length === 0;
-  if (state.selectedBoard && snapshot.boards.some((board) => board.id === state.selectedBoard)) boardPicker.value = state.selectedBoard;
-  metaNode.textContent = `${snapshot.authority} · ${snapshot.visible.devices}/${snapshot.totals.devices} devices · ${snapshot.visible.agents}/${snapshot.totals.agents} agents · ${snapshot.visible.boards}/${snapshot.totals.boards} boards`;
-  drawPaths(svg, snapshot);
-  if (resizeObserver) resizeObserver.disconnect();
-  if (typeof ResizeObserver !== "undefined") {
-    resizeObserver = new ResizeObserver(() => drawPaths(svg, snapshot));
-    resizeObserver.observe(topologyNode);
-  } else if (!resizeFallbackInstalled) {
-    resizeFallbackInstalled = true;
-    window.addEventListener("resize", () => state.snapshot && drawTopology(state.snapshot), { passive: true });
-  }
-}
-
-function drawPaths(svg, snapshot) {
-  if (!svg.isConnected) return;
-  svg.replaceChildren();
-  const bounds = topologyNode.getBoundingClientRect();
-  svg.setAttribute("viewBox", `0 0 ${Math.max(1, bounds.width)} ${Math.max(1, bounds.height)}`);
-  const endpoints = new Map([...topologyNode.querySelectorAll("[data-entity], [data-board]")].map((element) => [element.dataset.entity ?? element.dataset.board, element]));
-  const addPath = (from, to, active = false) => {
-    const source = endpoints.get(from)?.getBoundingClientRect();
-    const target = endpoints.get(to)?.getBoundingClientRect();
-    if (!source || !target) return;
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const x1 = source.left + source.width / 2 - bounds.left;
-    const y1 = source.top + source.height / 2 - bounds.top;
-    const x2 = target.left + target.width / 2 - bounds.left;
-    const y2 = target.top + target.height / 2 - bounds.top;
-    const middleX = (x1 + x2) / 2;
-    line.setAttribute("d", `M ${x1} ${y1} C ${middleX} ${y1}, ${middleX} ${y2}, ${x2} ${y2}`);
-    line.setAttribute("class", active ? "topology-path is-active" : "topology-path");
-    svg.append(line);
-  };
-  for (const link of snapshot.links) if (link.state === "active") addPath(link.from, link.to);
-  const now = Date.now();
-  state.pulses = state.pulses.filter((pulse) => pulse.until > now);
-  for (const pulse of state.pulses) addPath(pulse.from, pulse.to, true);
+  if (state.selectedBoard) boardPicker.value = state.selectedBoard;
+  metaNode.textContent = `${snapshot.visible.devices}/${snapshot.totals.devices} devices · ${snapshot.visible.agents}/${snapshot.totals.agents} workers · ${snapshot.visible.boards}/${snapshot.totals.boards} boards`;
+  metaNode.title = `${snapshot.authority} · ${timeLabel(snapshot.time)}`;
 }
 
 function chooseBoard(board) {
   if (board !== null && !state.snapshot?.boards.some((entry) => entry.id === board)) return;
   cancelPaneRequests();
   try { selectBoard(state, board); } catch { return; }
+  state.selectedNode = board;
   boardPicker.value = board;
   drawTopology();
   if (state.token && board) {
@@ -358,6 +280,8 @@ function cancelPaneRequests() {
   for (const name of ["inbox", "bounties"]) {
     paneControllers.get(name)?.abort();
     paneControllers.delete(name);
+    state[name].generation += 1;
+    state[name].loading = false;
   }
 }
 
@@ -365,6 +289,7 @@ function resetForResync() {
   clearTimeout(refreshTimer);
   clearTimeout(paneRefreshTimer);
   clearTimeout(pulseTimer);
+  clearTimeout(freshnessTimer);
   snapshotController?.abort();
   snapshotController = null;
   cancelPaneRequests();
@@ -372,8 +297,9 @@ function resetForResync() {
   state.selectedNode = null;
   state.pulses = [];
   selectBoard(state, null);
-  topologyNode.replaceChildren();
+  renderViews();
   metaNode.textContent = "";
+  metaNode.title = "";
   boardPicker.replaceChildren();
   boardPicker.disabled = true;
   clearPane("inbox");
@@ -435,11 +361,11 @@ function renderPane(name) {
 
 async function loadPane(name, after, reuse = false) {
   const pane = state[name];
-  const generation = pane.generation;
   const selectedBoard = state.selectedBoard;
   const board = state.snapshot?.boards.find((item) => item.id === selectedBoard);
   const boardAuthority = state.boardAuthority ?? (board && (!board.reported || board.authority !== state.snapshot.authority) ? board.authority : null);
   if (!state.token || !selectedBoard || !board) return;
+  const generation = ++pane.generation;
   pane.loading = true;
   pane.error = null;
   renderPane(name);
@@ -495,8 +421,8 @@ function navigatePane(name, direction) {
   } else if (pane.page?.next) loadPane(name, pane.page.next);
 }
 
-async function refreshSnapshot() {
-  if (!state.token || pageHidden) return;
+async function refreshSnapshot(refreshBoardPages = false) {
+  if (!state.token || pageHidden) return false;
   const token = state.token;
   const wasConnected = state.connection === "connected";
   snapshotController?.abort();
@@ -505,7 +431,14 @@ async function refreshSnapshot() {
   const generation = ++snapshotGeneration;
   try {
     const snapshot = await loadSnapshot(controller.signal);
-    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration) return;
+    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration) return false;
+    if (state.snapshot && (state.snapshot.authority !== snapshot.authority || !sameFeedBoundary(state.snapshot.cursor, snapshot.cursor))) {
+      stopStream();
+      cancelPaneRequests();
+      selectBoard(state, null);
+      state.selectedNode = null;
+      state.pulses = [];
+    }
     state.snapshot = snapshot;
     let selectedChanged = false;
     if (!state.selectedBoard || !snapshot.boards.some((board) => board.id === state.selectedBoard)) {
@@ -513,26 +446,32 @@ async function refreshSnapshot() {
       if (preferred !== state.selectedBoard) {
         cancelPaneRequests();
         selectBoard(state, preferred);
+        if (!state.selectedNode) state.selectedNode = preferred;
         selectedChanged = true;
       }
     }
     drawTopology(snapshot);
     setConnection("connected", "Connected");
-    if (selectedChanged && state.selectedBoard) {
-      refreshPanes();
-    } else if (!wasConnected && state.selectedBoard) {
+    if (state.selectedBoard && (selectedChanged || !wasConnected || refreshBoardPages)) {
       refreshPanes();
     }
+    connectStream();
+    return true;
   } catch (error) {
-    if (error.name === "AbortError") return;
-    if (error.code === "auth" || error.code === "denied") return;
-    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration || pageHidden) return;
+    if (error.name === "AbortError") return false;
+    if (error.code === "auth" || error.code === "denied") return false;
+    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration || pageHidden) return false;
     setConnection("error", error.code === "reset" ? "Topology changed" : error.code === "unavailable" ? "Unavailable" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid topology");
     statusNode.dataset.state = "error";
   } finally {
     requestControllers.delete(controller);
     if (snapshotController === controller) snapshotController = null;
+    if (generation === snapshotGeneration) {
+      clearTimeout(freshnessTimer);
+      if (state.token === token && !pageHidden) freshnessTimer = setTimeout(() => refreshSnapshot(), 10_000);
+    }
   }
+  return false;
 }
 
 function scheduleRefresh() {
@@ -565,8 +504,24 @@ function schedulePulseExpiry() {
 
 async function readEventStream(response, signal, onFrame) {
   const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-  if (type !== "text/event-stream" || !response.body) throw new Error("Invalid event stream");
+  if (type !== "text/event-stream" || !response.body) {
+    await response.body?.cancel();
+    throw new Error("Invalid event stream");
+  }
   await consumeSseBody(response.body, signal, onFrame);
+}
+
+function waitForReconnect(delay, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, delay);
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
 function stopStream() {
@@ -582,26 +537,52 @@ async function connectStream() {
   const generation = ++streamGeneration;
   streamTask = (async () => {
     let delay = 500;
+    let needsSnapshot = false;
     while (state.token === token && !pageHidden && generation === streamGeneration) {
       const controller = new AbortController();
+      const fetchController = new AbortController();
+      const abortFetch = () => fetchController.abort();
+      let headerTimer = null;
+      let timedOut = false;
       streamController = controller;
       try {
+        if (needsSnapshot && !await refreshSnapshot()) {
+          await waitForReconnect(delay, controller.signal);
+          delay = Math.min(delay * 2, 10_000);
+          continue;
+        }
+        needsSnapshot = false;
+        if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted) break;
         const url = new URL("/v1/events", location.origin);
         url.searchParams.set("cursor", state.snapshot.cursor);
+        controller.signal.addEventListener("abort", abortFetch, { once: true });
+        headerTimer = setTimeout(() => { timedOut = true; fetchController.abort(); }, REQUEST_DEADLINE_MS);
         const response = await fetch(`${url.pathname}${url.search}`, {
           method: "GET",
           headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
-          credentials: "omit", cache: "no-store", mode: "same-origin", redirect: "error", signal: controller.signal,
+          credentials: "omit", cache: "no-store", mode: "same-origin", redirect: "error", signal: fetchController.signal,
         });
+        clearTimeout(headerTimer);
+        if (timedOut) {
+          await response.body?.cancel();
+          throw new Error("Event stream handshake timed out");
+        }
+        if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted) {
+          await response.body?.cancel();
+          break;
+        }
         if (!response.ok) {
           const failure = safeHttpError(response.status);
           const error = new Error(failure.label);
           error.code = failure.code;
+          try { await response.body?.cancel(); }
+          catch (cause) { error.cause = cause; }
           throw error;
         }
         setConnection("connected", "Connected");
         delay = 500;
         await readEventStream(response, controller.signal, (frame) => {
+          if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted || !state.snapshot) return;
           if (frame.event === "reset") {
             resetForResync();
             throw new Error("Feed reset");
@@ -618,20 +599,21 @@ async function connectStream() {
         });
         if (!controller.signal.aborted) {
           setConnection("disconnected", "Reconnecting");
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          needsSnapshot = true;
+          await waitForReconnect(delay, controller.signal);
           delay = Math.min(delay * 2, 10_000);
-          if (state.token && !pageHidden) await refreshSnapshot();
         }
       } catch (error) {
         if (generation !== streamGeneration) break;
         if (controller.signal.aborted && (!state.token || pageHidden)) break;
         if (error.code === "auth" || error.code === "denied") { handleAuthFault(error, token); break; }
-        setConnection(error.code === "unavailable" ? "error" : "disconnected", error.message === "Failed to fetch" ? "Offline · reconnecting" : "Reconnecting");
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        setConnection(timedOut || error.code === "unavailable" ? "error" : "disconnected", timedOut ? "Timed out · reconnecting" : error.message === "Failed to fetch" ? "Offline · reconnecting" : "Reconnecting");
+        needsSnapshot = true;
+        await waitForReconnect(delay, controller.signal);
         delay = Math.min(delay * 2, 10_000);
-        if (state.token !== token || pageHidden || generation !== streamGeneration) break;
-        await refreshSnapshot();
       } finally {
+        clearTimeout(headerTimer);
+        controller.signal.removeEventListener("abort", abortFetch);
         if (streamController === controller) streamController = null;
       }
     }
@@ -650,7 +632,6 @@ async function connect() {
   state.token = token;
   setConnection("disconnected", "Connecting");
   await refreshSnapshot();
-  if (state.token && state.snapshot) connectStream();
 }
 
 byId("auth-form").addEventListener("submit", (event) => {
@@ -658,6 +639,31 @@ byId("auth-form").addEventListener("submit", (event) => {
   connect();
 });
 boardPicker.addEventListener("change", () => chooseBoard(boardPicker.value));
+topologyNode.addEventListener("select-node", (event) => {
+  if (!state.snapshot?.devices.some((row) => row.id === event.detail) && !state.snapshot?.agents.some((row) => row.id === event.detail)) return;
+  state.selectedNode = event.detail;
+  renderViews();
+});
+topologyNode.addEventListener("select-board", (event) => chooseBoard(event.detail));
+byId("node-filter").addEventListener("input", (event) => { topologyNode.query = event.target.value.slice(0, 128); });
+byId("expand-all").addEventListener("click", () => topologyNode.expandAll());
+byId("refresh").addEventListener("click", () => refreshSnapshot(true));
+byId("disconnect").addEventListener("click", () => {
+  clearTimeout(refreshTimer);
+  snapshotController?.abort();
+  clearPrivateState();
+  setConnection("disconnected", "Disconnected");
+});
+document.addEventListener("keydown", (event) => {
+  const filter = byId("node-filter");
+  if (event.key === "Escape" && event.target === filter) {
+    filter.value = "";
+    topologyNode.query = "";
+  } else if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target?.closest?.("input, select, textarea, [contenteditable]")) {
+    event.preventDefault();
+    filter.focus();
+  }
+});
 for (const name of ["inbox", "bounties"]) {
   byId(`${name}-prev`).addEventListener("click", () => navigatePane(name, -1));
   byId(`${name}-next`).addEventListener("click", () => navigatePane(name, 1));
@@ -666,13 +672,18 @@ document.addEventListener("visibilitychange", () => {
   pageHidden = document.hidden;
   if (pageHidden) {
     snapshotController?.abort();
+    cancelPaneRequests();
     state.pulses = [];
+    clearTimeout(refreshTimer);
+    clearTimeout(paneRefreshTimer);
     clearTimeout(pulseTimer);
+    clearTimeout(freshnessTimer);
     drawTopology();
     stopStream();
     setConnection("disconnected", "Paused");
   }
   else if (state.token) {
-    refreshSnapshot().then(() => { if (state.snapshot) connectStream(); });
+    refreshSnapshot();
   }
 });
+renderViews();

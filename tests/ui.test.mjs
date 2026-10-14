@@ -116,6 +116,36 @@ test("A45 SSE reader parses many frames from one chunk and cancels an oversized 
   await assert.rejects(consumeSseBody(oversized, new AbortController().signal, () => {}), /frame limit/);
 });
 
+test("SSE cancellation stops dispatching already buffered frames", async () => {
+  const controller = new AbortController();
+  const frame = 'event: keepalive\ndata: {"event":"keepalive","time":1}\n\n';
+  let count = 0;
+  const body = new ReadableStream({ start(stream) {
+    stream.enqueue(new TextEncoder().encode(frame.repeat(2)));
+    stream.close();
+  } });
+  await consumeSseBody(body, controller.signal, () => { count += 1; controller.abort(); });
+  assert.equal(count, 1);
+  assert.equal(body.locked, false);
+});
+
+test("SSE cancellation releases an idle reader without waiting for another frame", async () => {
+  const controller = new AbortController();
+  let source, cancelled = false, settled = false;
+  const body = new ReadableStream({ start(stream) { source = stream; }, cancel() { cancelled = true; } });
+  const reading = consumeSseBody(body, controller.signal, () => {}).finally(() => { settled = true; });
+  try {
+    controller.abort();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, true);
+    assert.equal(cancelled, true);
+    assert.equal(body.locked, false);
+  } finally {
+    if (!settled) source.close();
+    await reading;
+  }
+});
+
 test("A47 board selection invalidates both independent pane generations and clears old pages", () => {
   const state = createUiState();
   state.snapshot = parseSnapshot(snapshot());
