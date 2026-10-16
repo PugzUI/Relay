@@ -1,0 +1,2 @@
+# Preserve the upstream bundle byte-for-byte, including embedded shader strings.
+/tests/renderer-comparison/vendor/pixi.min.mjs -whitespace linguist-vendored

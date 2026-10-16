@@ -157,3 +157,18 @@ does not qualify native agent delivery. See
 See [acceptance cases](docs/acceptance.md)
 and [the frozen contract](docs/contract.md) for implementation and qualification
 boundaries. Licensed under [MIT](LICENSE).
+
+### Design and development fixtures
+
+[DESIGN.md](DESIGN.md) describes the existing UI theme. `.editorconfig`,
+`biome.json`, and `ruff.toml` configure optional editor/developer tooling;
+they do not add runtime dependencies or replace the checks above. The lint
+rules are development guidance, not a claim that the full repository is
+lint-clean. Generated UI output and the vendored renderer are not lint targets.
+
+The [renderer comparison](tests/renderer-comparison/README.md) and
+[workspace prototype](tests/workspace-prototype/README.md) are isolated,
+optional verification fixtures, not production UI or native-agent delivery.
+The renderer retains its local bundle and license. The workspace prototype
+has its own locked dependencies and regenerates its ignored `assets/` directory.
+Both directories remain excluded from the published Relay package.

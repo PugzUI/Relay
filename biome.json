@@ -1,0 +1,51 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": ["**", "!ui/assets", "!tests/renderer-comparison/vendor"]
+  },
+  "formatter": {
+    "useEditorconfig": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedPrivateClassMembers": "error",
+        "noUnusedVariables": "error",
+        "noUnreachable": "error"
+      },
+      "complexity": {
+        "noUselessCatch": "error",
+        "noUselessEmptyExport": "error",
+        "noUselessFragments": "error",
+        "noExcessiveCognitiveComplexity": {
+          "level": "error",
+          "options": {
+            "maxAllowedComplexity": 12
+          }
+        }
+      },
+      "style": {
+        "useConst": "error"
+      },
+      "suspicious": {
+        "noAsyncPromiseExecutor": "error",
+        "useAwait": "error",
+        "useErrorMessage": "error"
+      }
+    }
+  },
+  "assist": {
+    "enabled": false
+  }
+}

@@ -1,0 +1,37 @@
+body { font-family: var(--f-mono); }
+header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-20); padding: var(--sp-16) var(--sp-20); border-bottom: var(--bw) solid var(--c-sep); }
+h1 { font-size: 1.5rem; }
+.toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-8); }
+.fixture { color: var(--c-muted); font-size: var(--fs-xs); margin-left: auto; }
+button { font-family: var(--f-sans); }
+#connection { padding: var(--sp-8) var(--sp-20); min-height: var(--status-min-h); font-size: var(--fs-xs); color: var(--c-secondary); overflow-wrap: anywhere; }
+#workspace { width: 100%; max-width: none; padding: 0; margin: 0; height: 80vh; min-height: 56rem; }
+footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-12); padding: var(--sp-12) var(--sp-20); border-top: var(--bw) solid var(--c-sep); font-size: var(--fs-xs); color: var(--c-muted); }
+.panel { width: 100%; height: 100%; overflow: auto; background: var(--c-bg); }
+.graph-host { width: 100%; height: 100%; min-height: 9rem; }
+.panel-heading { font-size: var(--fs-md); padding: var(--sp-16); border-bottom: var(--bw) solid var(--c-sep); }
+.agent-list, .actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); margin-block: var(--sp-16); }
+.board { display: grid; grid-template-columns: repeat(3, minmax(7.5rem, 1fr)); min-height: 12rem; }
+.lane { min-width: 0; padding: var(--sp-12); border-right: var(--bw) solid var(--c-sep); }
+.lane h3 { margin: 0 0 var(--sp-12); color: var(--c-secondary); font-size: var(--fs-xs); }
+.work { display: block; width: 100%; height: auto; min-height: var(--btn-h); text-align: left; padding: var(--sp-12) 0; border: 0; border-top: var(--bw) solid var(--c-sep); font-size: var(--fs-sm); line-height: var(--lh-body); overflow-wrap: anywhere; }
+.work small { display: block; color: var(--c-muted); font-family: var(--f-mono); font-size: var(--fs-xs); }
+.work.is-selected { color: var(--c-accent); background: var(--c-active); }
+.work-empty { color: var(--c-muted); font-size: var(--fs-xs); }
+.inspector { padding: var(--sp-16); border: 0; }
+.inspector h2 { font-size: var(--fs-md); }
+.inspector p { white-space: pre-line; color: var(--c-secondary); overflow-wrap: anywhere; }
+.inspector pre { color: var(--c-secondary); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.console-panel { display: flex; flex-direction: column; height: 100%; overflow: auto; background: var(--c-bg); }
+.console-actions { display: flex; flex-wrap: wrap; gap: var(--sp-8); padding: var(--sp-10); border-bottom: var(--bw) solid var(--c-sep); }
+.console-label { padding: var(--sp-8) var(--sp-12); font-size: var(--fs-xs); color: var(--c-muted); border-bottom: var(--bw) solid var(--c-bd-soft); }
+.terminal-host { flex: 1; min-height: 8rem; padding: var(--sp-8); }
+.events { margin: 0; padding: var(--sp-12) var(--sp-16); list-style: none; font-size: var(--fs-xs); }
+.events li { padding: var(--sp-6) 0; border-bottom: var(--bw) solid var(--c-bd-soft); overflow-wrap: anywhere; }
+.events time { margin-right: var(--sp-12); color: var(--c-muted); }
+.dockview-theme-dark { --dv-background-color: var(--c-bg); --dv-group-view-background-color: var(--c-bg); --dv-activegroup-visiblepanel-tab-background-color: var(--c-active); --dv-activegroup-hiddenpanel-tab-background-color: var(--c-bg-alt); --dv-inactivegroup-visiblepanel-tab-background-color: var(--c-surface); --dv-inactivegroup-hiddenpanel-tab-background-color: var(--c-bg-alt); --dv-tabs-and-actions-container-background-color: var(--c-bg-alt); --dv-activegroup-visiblepanel-tab-color: var(--c-accent); --dv-activegroup-hiddenpanel-tab-color: var(--c-secondary); --dv-inactivegroup-visiblepanel-tab-color: var(--c-fg); --dv-inactivegroup-hiddenpanel-tab-color: var(--c-muted); --dv-tab-divider-color: var(--c-sep); --dv-separator-border: var(--c-sep); --dv-paneview-header-border-color: var(--c-sep); --dv-tab-font-size: var(--fs-xs); --dv-tab-font-family: var(--f-mono); --dv-border-radius: var(--r-none); }
+.signal-wire { stroke-dasharray: 10 300; animation: signal 1s linear 1; }
+.signal-return { animation-direction: reverse; }
+@keyframes signal { to { stroke-dashoffset: -310; } }
+@media (prefers-reduced-motion: reduce) { .signal-wire { animation: none; stroke-dasharray: none; } }
+@media (max-width: 760px) { header { gap: var(--sp-12); padding: var(--sp-12); } .fixture { margin-left: 0; } }
