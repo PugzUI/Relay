@@ -71,6 +71,34 @@ test("A56 reservation retries retain exact authority, request, and attempt proof
   assert.deepEqual(listCapacity(relay), []);
 });
 
+test("addressed work capacity uses the shared budget and binds only its exact local claim", (t) => {
+  const relay = open({ root: temporaryRoot(t), device: "addressed-capacity" }); t.after(() => relay.close());
+  const worker = relay.register("worker"); const session = relay.join(worker.id);
+  const other = relay.register("worker"); const otherSession = relay.join(other.id);
+  const board = `host:${relay.device.id}`;
+  const addressed = relay.send(session.id, worker.id, { work: { task: "addressed" } });
+  relay.post(session.id, board, { work: { task: "board" } });
+  const reservationInput = { worker: worker.id, localSid: session.id, remoteSid: null, board: null, rid: "addressed-claim", authority: relay.authority, maxJobs: 1 };
+  const reserved = reserveCapacity(relay, reservationInput);
+  assert.equal(reserved.board, null);
+  assert.equal(relay._store.db.prepare("SELECT board FROM reservations WHERE worker=?").get(worker.id).board, "@addressed");
+  assert.equal(reserveCapacity(relay, reservationInput).board, null);
+  assert.throws(() => reserveCapacity(relay, { ...reservationInput, worker: other.id, localSid: otherSession.id, rid: "other-claim" }), { code: "full" });
+  assert.throws(() => reserveCapacity(relay, { ...reservationInput, rid: "sentinel-claim", board: "@addressed" }), { code: "input" });
+
+  const wrongTarget = relay.claim(session.id, { board });
+  assert.throws(() => bindCapacity(relay, { worker: worker.id, rid: reserved.rid, authority: relay.authority, lease: wrongTarget }), { code: "lease" });
+  const lease = relay.claim(session.id, { kind: "work" });
+  assert.equal(lease.mid, addressed.id);
+  const held = bindCapacity(relay, { worker: worker.id, rid: reserved.rid, authority: relay.authority, lease });
+  assert.equal(held.board, null);
+  assert.equal(listCapacity(relay, { worker: worker.id })[0].board, null);
+  beginCapacitySettlement(relay, { worker: worker.id, rid: reserved.rid, authority: relay.authority, settleRid: "addressed-settle", outcome: "done" });
+  const receipt = relay.ack(session.id, lease.id, "done");
+  assert.equal(resolveCapacity(relay, { worker: worker.id, rid: reserved.rid, proof: { kind: "attempt", rid: reserved.rid, authority: relay.authority, mid: receipt.mid, lease: lease.id, epoch: lease.epoch, state: "done" } }), null);
+  assert.deepEqual(listCapacity(relay), []);
+});
+
 test("A57 launch readiness binds the nonce, worker identity, session, and capability set", (t) => {
   const relay = open({ root: temporaryRoot(t), device: "launcher" }); t.after(() => relay.close());
   const prime = relay.register("worker", { slot: "prime" }); const primeSession = relay.join(prime.id);

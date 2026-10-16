@@ -20,6 +20,7 @@ const MAX_SNAPSHOT_ATTEMPTS = 3;
 const state = createUiState();
 const requestControllers = new Set();
 const paneControllers = new Map();
+const recordSignatures = new WeakMap();
 const byId = (id) => document.getElementById(id);
 const connectionNode = byId("connection");
 const topologyNode = byId("topology");
@@ -327,7 +328,6 @@ function renderPane(name) {
   const pane = state[name];
   const page = pane.page;
   const rows = byId(`${name}-rows`);
-  rows.replaceChildren();
   if (!state.selectedBoard) return clearPane(name);
   const status = byId(`${name}-status`);
   status.dataset.state = "";
@@ -342,18 +342,32 @@ function renderPane(name) {
   else status.textContent = "Not loaded";
   if (page) {
     byId(`${name}-count`).textContent = paneLabel(page);
+    const existing = new Map([...rows.children].map((item) => [item.dataset.mid, item]));
+    const retained = new Set();
+    let anchor = rows.firstChild;
     for (const row of page.items) {
-      const item = node("li", "record");
-      item.append(node("span", "record-id", row.id), node("span", "record-state", row.state));
-      if (name === "inbox" && row.data?.msg !== undefined) item.append(node("pre", "record-text", row.data.msg));
-      else if (name === "bounties" && row.data?.work !== undefined) item.append(node("pre", "record-text", JSON.stringify(row.data.work, null, 2)));
+      const item = existing.get(row.id) ?? node("li", "record");
+      item.dataset.mid = row.id;
+      const text = name === "inbox" ? row.data?.msg : row.data?.work === undefined ? undefined : JSON.stringify(row.data.work, null, 2);
       const metadata = name === "inbox"
         ? `seq ${row.seq} · ${timeLabel(row.init)}`
         : `seq ${row.seq} · ${row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none"}${row.series ? ` · series ${row.series}` : ""} · ${timeLabel(row.init)}`;
-      item.append(node("span", "record-meta", metadata));
-      rows.append(item);
+      const signature = JSON.stringify([row.id, row.state, text, metadata]);
+      if (recordSignatures.get(item) !== signature) {
+        item.replaceChildren(node("span", "record-id", row.id), node("span", "record-state", row.state));
+        if (text !== undefined) item.append(node("pre", "record-text", text));
+        item.append(node("span", "record-meta", metadata));
+        recordSignatures.set(item, signature);
+      }
+      retained.add(item);
+      if (item === anchor) anchor = anchor.nextSibling;
+      else rows.insertBefore(item, anchor);
     }
-  } else byId(`${name}-count`).textContent = "";
+    for (const item of [...rows.children]) if (!retained.has(item)) item.remove();
+  } else {
+    rows.replaceChildren();
+    byId(`${name}-count`).textContent = "";
+  }
   byId(`${name}-prev`).disabled = pane.loading || pane.pageIndex <= 0;
   byId(`${name}-next`).disabled = pane.loading || !page || page.complete;
   byId(`${name}-page`).textContent = pane.pageIndex >= 0 ? `Page ${pane.pageBase + pane.pageIndex + 1}` : "";

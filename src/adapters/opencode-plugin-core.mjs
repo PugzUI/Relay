@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { callOpenCodeBridge } from "./opencode-bridge.mjs";
+import { createRecipientSession, recipientTools } from "./recipient-session.mjs";
 
 const SUPPORTED_VERSION = "2.0.27";
 const WORKER = /^[A-Za-z0-9._-]{1,63}:[A-Za-z0-9._-]{1,32}:(?:prime|[0-9]{3,32})$/;
@@ -16,7 +17,8 @@ function exact(value, keys) {
 }
 
 function pluginOptions(value) {
-  if (!exact(value, ["bindings", "nativeSession", "profile", "relayRoot"])) return null;
+  const required = ["bindings", "nativeSession", "profile", "relayRoot"];
+  if (!(exact(value, required) || exact(value, [...required, "consume"]) && value.consume === true)) return null;
   if (typeof value.relayRoot !== "string" || !value.relayRoot || value.relayRoot.includes("\0")
     || typeof value.profile !== "string" || !/^[A-Za-z0-9._-]{1,128}$/.test(value.profile)
     || typeof value.nativeSession !== "string" || !/^ses_[A-Za-z0-9_-]{1,120}$/.test(value.nativeSession)
@@ -79,12 +81,16 @@ function currentMessageIds(event, sessionId) {
   return ids;
 }
 
-export function createOpenCodePlugin() {
+export function createOpenCodePlugin({ callBridge = callOpenCodeBridge } = {}) {
+  if (typeof callBridge !== "function") throw new TypeError("OpenCode bridge function is invalid");
   return {
     id: "pugzui-relay-delivery",
     async setup(ctx) {
       const options = pluginOptions(ctx.options);
       if (ctx.app?.version !== SUPPORTED_VERSION || !options || !ctx.session || typeof ctx.session.get !== "function" || typeof ctx.session.prompt !== "function" || typeof ctx.session.wait !== "function" || typeof ctx.session.hook !== "function" || typeof ctx.event?.subscribe !== "function") return;
+      if (options.consume === true && (!ctx.tool || typeof ctx.tool.transform !== "function" || typeof ctx.tool.list !== "function")) {
+        throw new Error("OpenCode native tool API is unavailable for recipient consumption");
+      }
       let targetInfo;
       try {
         targetInfo = await withNativeDeadline(new AbortController().signal, SESSION_READ_MS,
@@ -100,16 +106,16 @@ export function createOpenCodePlugin() {
       const nativeReads = new Map();
       const bindingIds = [];
       let stopPromise = null;
+      let reconnectPromise = null;
       let contextHook;
       let modelHook;
+      let toolTransform;
+      let recipientSession;
       let loop = Promise.resolve();
       let eventLoop = Promise.resolve();
-      const target = Object.freeze({
-        runtimeInstance: `opencode-${process.pid}-${Math.floor(Date.now() - process.uptime() * 1000)}`,
-        profile: options.profile,
-        nativeSession: options.nativeSession,
-        lifecycleGeneration: randomUUID(),
-      });
+      const runtimeInstance = `opencode-${process.pid}-${Math.floor(Date.now() - process.uptime() * 1000)}`;
+      const makeTarget = () => Object.freeze({ runtimeInstance, profile: options.profile, nativeSession: options.nativeSession, lifecycleGeneration: randomUUID() });
+      let target = makeTarget();
       const capabilities = Object.freeze({ context: true, idle: true, launch: false });
 
       // The native SDK can ignore abort. Reuse pending reads instead of leaking one per poll.
@@ -124,14 +130,82 @@ export function createOpenCodePlugin() {
 
       const report = (attemptId, entry) => {
         const observation = { state: entry.state, nativeRequestId: entry.nativeRequestId };
-        entry.reportQueue = (entry.reportQueue ?? Promise.resolve()).then(async () => {
+        entry.reportQueue = (entry.reportQueue ?? Promise.resolve()).catch(() => {}).then(async () => {
           if (!bindingIds.length || lifecycle.signal.aborted) return;
-          await callOpenCodeBridge(options.relayRoot, "delivery.observe", {
+          await callBridge(options.relayRoot, "delivery.observe", {
             bindingId: bindingIds[0], attemptId, observation,
           }, lifecycle.signal);
         });
         return entry.reportQueue;
       };
+
+      async function bindBridge(fresh = false) {
+        if (fresh) {
+          const oldIds = bindingIds.splice(0);
+          for (const bindingId of oldIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
+          target = makeTarget();
+        }
+        const nextIds = [];
+        try {
+          for (const binding of options.bindings) {
+            const registration = await callBridge(options.relayRoot, "delivery.bind", {
+              ...binding,
+              ...(options.consume === true ? { consume: true } : {}),
+              profile: options.profile,
+              target,
+              capabilities,
+            }, lifecycle.signal);
+            if (!registration || typeof registration.bindingId !== "string" || !NATIVE_ID.test(registration.bindingId)) throw new Error("Relay binding was rejected");
+            nextIds.push(registration.bindingId);
+            if (lifecycle.signal.aborted) {
+              for (const bindingId of nextIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
+              return;
+            }
+          }
+          if (lifecycle.signal.aborted) {
+            for (const bindingId of nextIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
+            return;
+          }
+          bindingIds.push(...nextIds);
+          if (recipientSession) {
+            await recipientSession.rebind(options.bindings.map((binding, index) => ({ ...binding, id: bindingIds[index] })));
+          }
+          for (const [attemptId, entry] of attempts) {
+            if (entry.state === "context_observed" || entry.state === "turn_started") await report(attemptId, entry);
+          }
+        } catch (error) {
+          for (const bindingId of nextIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
+          bindingIds.splice(0);
+          throw error;
+        }
+      }
+
+      async function reconnect() {
+        if (lifecycle.signal.aborted) return false;
+        if (reconnectPromise) return reconnectPromise;
+        reconnectPromise = (async () => {
+          for (const [index, waitMs] of [0, 250, 500, 1000, 2000].entries()) {
+            if (index && lifecycle.signal.aborted) return false;
+            if (waitMs) await new Promise((resolveWait) => {
+              const timer = setTimeout(() => {
+                lifecycle.signal.removeEventListener("abort", cancel);
+                resolveWait();
+              }, waitMs);
+              const cancel = () => { clearTimeout(timer); resolveWait(); };
+              lifecycle.signal.addEventListener("abort", cancel, { once: true });
+              timer.unref?.();
+            });
+            if (lifecycle.signal.aborted) return false;
+            try {
+              await bindBridge(true);
+              return true;
+            } catch {}
+          }
+          await stop();
+          return false;
+        })().finally(() => { reconnectPromise = null; });
+        return reconnectPromise;
+      }
 
       const onContext = (event) => {
         if (event?.sessionID !== options.nativeSession) return;
@@ -142,7 +216,7 @@ export function createOpenCodePlugin() {
           if (!messageIds.has(entry.nativeRequestId)) continue;
           if (entry.state === "unknown") {
             entry.state = "context_observed";
-            void report(attemptId, entry).catch(() => { void stop(); });
+            void report(attemptId, entry).catch(() => { void reconnect(); });
           }
           if (entry.state === "context_observed") contextAttempts.add(attemptId);
         }
@@ -155,29 +229,47 @@ export function createOpenCodePlugin() {
           const entry = attempts.get(attemptId);
           if (!entry || entry.state !== "context_observed") continue;
           entry.state = "turn_started";
-          void report(attemptId, entry).catch(() => { void stop(); });
+          void report(attemptId, entry).catch(() => { void reconnect(); });
         }
       };
 
       try {
         contextHook = await ctx.session.hook("context", onContext);
         modelHook = await ctx.session.hook("model.request", onModelRequest);
-        for (const binding of options.bindings) {
-          const registration = await callOpenCodeBridge(options.relayRoot, "delivery.bind", {
-            ...binding,
-            profile: options.profile,
-            target,
-            capabilities,
-          }, lifecycle.signal);
-          if (!registration || typeof registration.bindingId !== "string" || !NATIVE_ID.test(registration.bindingId)) throw new Error("Relay binding was rejected");
-          bindingIds.push(registration.bindingId);
+        await bindBridge();
+        if (options.consume === true) {
+          recipientSession = createRecipientSession({
+            relayRoot: options.relayRoot,
+            bindings: options.bindings.map((binding, index) => ({ ...binding, id: bindingIds[index] })),
+            bridge: async (request, signal) => {
+              try {
+                return await callBridge(options.relayRoot, "delivery.recipient", request, signal);
+              } catch (error) {
+                if (!lifecycle.signal.aborted) void reconnect().catch(() => {});
+                throw error;
+              }
+            },
+          });
+          await recipientSession.start();
+          const tools = recipientTools(recipientSession, options.nativeSession);
+          toolTransform = await ctx.tool.transform((editor) => {
+            const current = editor.list();
+            if (current.length > 256 || tools.some((tool) => current.some((entry) => entry.id === tool.name))) {
+              throw new Error("OpenCode recipient tool names conflict with the native tool set");
+            }
+            for (const tool of tools) editor.add(tool);
+          });
+          const installed = await ctx.tool.list();
+          if (tools.some((tool) => !installed.some((entry) => entry.id === tool.name))) throw new Error("OpenCode recipient tools were not registered");
         }
       } catch {
         lifecycle.abort();
         eventLifecycle.abort();
+        await recipientSession?.close().catch(() => {});
+        await dispose(toolTransform).catch(() => {});
         await dispose(contextHook).catch(() => {});
         await dispose(modelHook).catch(() => {});
-        for (const bindingId of bindingIds) await callOpenCodeBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
+        for (const bindingId of bindingIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
         return;
       }
 
@@ -226,10 +318,11 @@ export function createOpenCodePlugin() {
         lifecycle.abort();
         eventLifecycle.abort();
         stopPromise = (async () => {
+          await recipientSession?.close().catch(() => {});
           await dispose(contextHook).catch(() => {});
           await dispose(modelHook).catch(() => {});
-          for (const bindingId of bindingIds) await callOpenCodeBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
-          attempts.clear();
+          await dispose(toolTransform).catch(() => {});
+          for (const bindingId of bindingIds) await callBridge(options.relayRoot, "delivery.close", { bindingId }).catch(() => {});
           contextAttempts.clear();
           nativeReads.clear();
         })();
@@ -237,18 +330,35 @@ export function createOpenCodePlugin() {
       }
 
       loop = (async () => {
-        try {
-          while (!lifecycle.signal.aborted) {
-            const bindingId = bindingIds[0];
-            const next = await callOpenCodeBridge(options.relayRoot, "delivery.next", { bindingId }, lifecycle.signal);
-            if (!next || next.command === null) continue;
-            const command = next.command;
-            if (!command || typeof command.callId !== "string" || !["status", "submit"].includes(command.method)) throw new Error("Invalid native command");
-            const result = await callNative(command);
-            await callOpenCodeBridge(options.relayRoot, "delivery.complete", { bindingId, callId: command.callId, result }, lifecycle.signal);
+        while (!lifecycle.signal.aborted) {
+          const bindingId = bindingIds[0];
+          let next;
+          try {
+            next = await callBridge(options.relayRoot, "delivery.next", { bindingId }, lifecycle.signal);
+          } catch {
+            if (lifecycle.signal.aborted) break;
+            if (!await reconnect()) break;
+            continue;
           }
-        } catch {
-          if (!lifecycle.signal.aborted) await stop();
+          if (!next || next.command === null) continue;
+          const command = next.command;
+          if (!command || typeof command.callId !== "string" || !["status", "submit"].includes(command.method)) {
+            await stop();
+            break;
+          }
+          let result;
+          try { result = await callNative(command); }
+          catch {
+            // Native admission may have succeeded before the SDK rejected or timed out.
+            // Keep its attempt unknown and never submit it again.
+            await stop();
+            break;
+          }
+          try {
+            await callBridge(options.relayRoot, "delivery.complete", { bindingId, callId: command.callId, result }, lifecycle.signal);
+          } catch {
+            if (lifecycle.signal.aborted || !await reconnect()) break;
+          }
         }
       })();
 
@@ -268,8 +378,9 @@ export function createOpenCodePlugin() {
                 attempts.delete(attemptId);
               }, () => {
                 entry.waitingForIdle = false;
-              }).catch(() => { void stop(); });
+              }).catch(() => { void reconnect(); });
             }
+            void recipientSession?.activationEnded().catch(() => {});
           }
         } catch {
           if (!eventLifecycle.signal.aborted) await stop();

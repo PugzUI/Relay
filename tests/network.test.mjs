@@ -1,15 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { createServer as createNetServer } from "node:net";
 import { createServer } from "node:http";
+import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Client, connect } from "../src/client.mjs";
+import { Client, connect, createFixedClient, invokeClient } from "../src/client.mjs";
 import { serve } from "../src/broker.mjs";
 import { Fault } from "../src/fault.mjs";
 import { readConfig, parseJsonStrict } from "../src/config.mjs";
 import { setup } from "../src/relay.mjs";
 import { credential, emptyGrant, privateFile, withTempDir } from "./network-helpers.mjs";
+import { performance } from "node:perf_hooks";
+
+test("Client cancels an individual owned RPC request", async (t) => {
+  await withTempDir(async (root) => {
+    const auth = credential();
+    const tokenFile = await privateFile(join(root, "token"), auth.token);
+    const client = await createFixedClient({ url: "http://127.0.0.1:1", tokenFile, mode: "local" });
+    const request = new EventEmitter();
+    let destroyed = 0;
+    request.destroy = () => { destroyed++; return request; };
+    request.end = () => {};
+    t.mock.method(http, "request", () => request);
+    const controller = new AbortController();
+    try {
+      const pending = invokeClient(client, {
+        rid: "cancelled-request", op: "stats", args: {}, deadline: performance.now() + 1000, signal: controller.signal,
+      });
+      controller.abort();
+      await assert.rejects(pending, (error) => error instanceof Fault && error.code === "unavailable");
+      assert.equal(destroyed, 1);
+    } finally { await client.close(); }
+  });
+});
 
 test("Client public calls are authenticated and reject lossy envelopes before sending", async () => {
   assert.throws(() => new Client(), /Use connect\(\)/);

@@ -332,6 +332,44 @@ test("OpenCode bridge closes a late Relay binding when shutdown races startup", 
   assert.equal(closedHandle, true);
 });
 
+test("OpenCode bridge gates recipient forwarding on consume and keeps identity outside tool arguments", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "relay-opencode-recipient-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const received = [];
+  const controller = new AbortController();
+  const adapter = await startDeliveryAdapter({
+    client: "opencode", root, signal: controller.signal, onEvidence: () => {},
+    bind: async (input) => {
+      assert.equal(Object.hasOwn(input, "consume"), false, "adapter-only opt-in is stripped before supervisor bind");
+      return Object.freeze({ close: async () => {}, observe: async () => true,
+        recipient: async (op, args) => { received.push({ op, args }); return { op, args }; } });
+    },
+  });
+  t.after(() => adapter.close());
+
+  const target = { runtimeInstance: "opencode-fixture", profile: "default", nativeSession: sessionId, lifecycleGeneration: "lifecycle-fixture" };
+  const base = { authority: "host:relay", worker: "relay-device:opencode:prime", sid: "relay-session-fixture", epoch: 4,
+    profile: "default", target, capabilities: { context: true, idle: true, launch: false } };
+  const consuming = await callOpenCodeBridge(root, "delivery.bind", { ...base, consume: true });
+  const noticeOnly = await callOpenCodeBridge(root, "delivery.bind", base);
+
+  const forwarded = await callOpenCodeBridge(root, "delivery.recipient", {
+    bindingId: consuming.bindingId, op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" },
+  });
+  assert.deepEqual(forwarded, { op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" } });
+  assert.deepEqual(received, [{ op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" } }]);
+  await assert.rejects(callOpenCodeBridge(root, "delivery.recipient", {
+    bindingId: noticeOnly.bindingId, op: "pending", args: {},
+  }), /rejected/);
+  await assert.rejects(callOpenCodeBridge(root, "delivery.recipient", {
+    bindingId: consuming.bindingId, op: "claim", args: { kind: "work", sid: "forged" },
+  }), /rejected/);
+
+  await callOpenCodeBridge(root, "delivery.close", { bindingId: consuming.bindingId });
+  await callOpenCodeBridge(root, "delivery.close", { bindingId: noticeOnly.bindingId });
+  await adapter.close();
+});
+
 test("OpenCode status and cleanup stay bounded when SDK reads ignore abort", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "relay-opencode-busy-"));
   const waits = [];

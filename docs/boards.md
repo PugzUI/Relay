@@ -30,13 +30,17 @@ not a dependency graph. An earlier unfinished member blocks a later member;
 callers post a successor only after its predecessor completes when success is
 required.
 
-The optional local Pool reserves capacity across local and hub authorities
-before board claims. An uncertain remote result keeps the exact request and
-reservation until the authority establishes the outcome. Inbox message claims
-do not use board-job capacity. Raw `claim` is not a resource-availability
-guarantee. Local child launch is disabled by default and uses only a fixed,
-operator-configured recipe with a bounded budget and verified process
-ownership.
+The local Pool rotates across local and hub addressed messages, addressed
+work and work boards. It skips unsuitable capabilities, honors series order,
+and never executes unclaimed work. All work shares the same persisted
+`maxJobs` capacity ledger; an uncertain claim or settlement keeps its slot.
+Addressed `msg` claims do not consume that work budget. Pool executes one
+accepted item per worker loop and requires an explicit outcome. Runtime
+session and claim renewal belong to the worker owner, not Pool.
+
+Raw `claim` is not a resource-availability guarantee. Local child launch is
+disabled by default and uses only a fixed operator-configured recipe with a
+bounded budget and verified process ownership.
 
 Posted Inbox rows count toward retained message limits and seven-day terminal
 retention. Retained send keys and RPC outcomes protect referenced rows. Reads

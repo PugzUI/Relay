@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
+import { spawn } from "node:child_process";
+import { parseStrictJsonText } from "./strict-json.mjs";
 
 const route = {
   setup: { positionals: 0, flags: { root: "one", device: "one", role: "one", json: "bool" }, local: true },
@@ -23,7 +25,7 @@ const route = {
   snapshot: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", device: "one", limit: "one", after: "one", json: "bool" }, readOnly: true },
   pending: { positionals: 0, flags: { root: "one", url: "one", "token-file": "one", "ca-file": "one", mode: "one", sid: "one", json: "bool" }, readOnly: true },
   purge: { positionals: 0, flags: { root: "one", before: "one", dry: "bool", json: "bool" }, local: true },
-  serve: { positionals: 0, flags: { root: "one", config: "one", json: "bool" }, local: true },
+  serve: { positionals: 0, flags: { root: "one", config: "one", json: "bool", "no-copy-token": "bool" }, local: true },
   migrate: { positionals: 0, flags: { root: "one", to: "one", backup: "one", config: "one", json: "bool" }, local: true },
   "delivery-status": { positionals: 0, flags: { root: "one", config: "one", json: "bool" }, local: true, readOnly: true },
   "delivery-reconcile": { positionals: 1, flags: { root: "one", outcome: "one", "reason-code": "one", confirm: "bool", json: "bool" }, local: true },
@@ -89,6 +91,11 @@ export function parseArgs(argv) {
   if (command === "list" && flags.to && flags.board) throw new CliInputError("--to and --board are mutually exclusive");
   if (command === "claim" && flags.board && flags.kind === "msg") throw new CliInputError("board claims accept work only");
 
+  const defaultLocal = command === "serve" && flags.root === undefined && flags.config === undefined;
+  if (defaultLocal) {
+    flags.root = ".local/store";
+    flags.config = ".local/relay.json";
+  }
   const hasRoot = flags.root !== undefined;
   const hasUrl = flags.url !== undefined;
   if (hasRoot && hasUrl) throw new CliInputError("--root and --url are mutually exclusive");
@@ -118,14 +125,14 @@ export function parseArgs(argv) {
   if (command === "pending") required(flags, "sid");
   if (["claim", "touch", "ack", "release"].includes(command)) required(flags, "sid");
   if (command === "ack") required(flags, "outcome");
-  return { command, positional, flags, readOnly: Boolean(spec.readOnly), help: false };
+  return { command, positional, flags, readOnly: Boolean(spec.readOnly), help: false, defaultLocal };
 }
 
 function required(flags, key) {
   if (!flags[key]) throw new CliInputError(`--${key} is required`);
 }
 
-const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list pending stats audit snapshot purge migrate serve delivery-status delivery-reconcile\n\nLocal routes use --root PATH. Remote routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP requires --mode local and a literal loopback URL. Use delivery-status --root PATH --config FILE for read-only redacted diagnostics. Reconciliation requires --confirm and --reason-code operator-confirmed while the broker is stopped. Migration requires an unused backup path; rollback to v2 requires --config FILE with delivery disabled. Use --json for exact JSON output.\n`;
+const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list pending stats audit snapshot purge migrate serve delivery-status delivery-reconcile\n\nLocal routes use --root PATH. Bare serve (npm start) initializes/reuses the private .local/ host profile on loopback port 4200 and prints its URL and viewer token-file path. Local startup also attempts a Wayland clipboard copy using optional wl-copy; --no-copy-token or --json skips copying. Custom serve profiles require both --root PATH and --config FILE and never touch the clipboard. Remote routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP requires --mode local and a literal loopback URL. Use delivery-status --root PATH --config FILE for read-only redacted diagnostics. Reconciliation requires --confirm and --reason-code operator-confirmed while the broker is stopped. Migration requires an unused backup path; rollback to v2 requires --config FILE with delivery disabled. Use --json for exact JSON output.\n`;
 
 export async function readEnvelope(stream = process.stdin) {
   const chunks = [];
@@ -156,64 +163,8 @@ function containsNul(value) {
 }
 
 export function parseStrictJson(source) {
-  let i = 0;
-  const ws = () => { while (/[\u0009\u000a\u000d\u0020]/.test(source[i] ?? "")) i += 1; };
-  const fail = () => { throw new CliInputError("stdin must contain one strict JSON value without duplicate object keys"); };
-  function value(depth = 0) {
-    if (depth > 128) fail();
-    ws();
-    const start = i;
-    const ch = source[i];
-    if (ch === '"') {
-      i += 1;
-      while (i < source.length) {
-        if (source[i] === "\\") i += 2;
-        else if (source[i++] === '"') break;
-      }
-      try { return JSON.parse(source.slice(start, i)); } catch { fail(); }
-    }
-    if (ch === "{") {
-      i += 1; ws();
-      const out = {};
-      const keys = new Set();
-      if (source[i] === "}") { i += 1; return out; }
-      while (i < source.length) {
-        ws();
-        if (source[i] !== '"') fail();
-        const key = value(depth + 1);
-        if (keys.has(key)) fail();
-        keys.add(key); ws();
-        if (source[i++] !== ":") fail();
-        Object.defineProperty(out, key, { value: value(depth + 1), enumerable: true, writable: true, configurable: true });
-        ws();
-        if (source[i] === "}") { i += 1; return out; }
-        if (source[i++] !== ",") fail();
-      }
-      fail();
-    }
-    if (ch === "[") {
-      i += 1; ws();
-      const out = [];
-      if (source[i] === "]") { i += 1; return out; }
-      while (i < source.length) {
-        out.push(value(depth + 1)); ws();
-        if (source[i] === "]") { i += 1; return out; }
-        if (source[i++] !== ",") fail();
-      }
-      fail();
-    }
-    const rest = source.slice(i);
-    const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest);
-    if (number) { i += number[0].length; const parsed = Number(number[0]); if (!Number.isFinite(parsed)) fail(); return parsed; }
-    for (const [word, result] of [["true", true], ["false", false], ["null", null]]) {
-      if (rest.startsWith(word)) { i += word.length; return result; }
-    }
-    fail();
-  }
-  const result = value();
-  ws();
-  if (i !== source.length) fail();
-  return result;
+  try { return parseStrictJsonText(source, { maxBytes: 65_537, maxDepth: 128 }); }
+  catch { throw new CliInputError("stdin must contain one strict JSON value without duplicate object keys"); }
 }
 
 export async function main(argv = process.argv.slice(2), io = process) {
@@ -239,7 +190,7 @@ export async function main(argv = process.argv.slice(2), io = process) {
     }
     if (command === "enroll") {
       const { readConfig } = await import("./config.mjs");
-      const cfg = readConfig(flags.config);
+      const cfg = await readConfig(flags.config);
       if (!cfg.hub) throw new CliInputError("config has no fixed hub binding");
       const local = api.open({ root: flags.root, readOnly: true });
       try {
@@ -248,7 +199,14 @@ export async function main(argv = process.argv.slice(2), io = process) {
         finally { await client.close(); }
       } finally { local.close(); }
     }
-    if (command === "serve") return await serve(api, flags);
+    if (command === "serve") {
+      let profile;
+      if (parsed.defaultLocal) {
+        const { prepareLocalProfile } = await import("./config.mjs");
+        profile = await prepareLocalProfile(flags.root, flags.config);
+      }
+      return await serve(api, flags, io, profile);
+    }
     if (command === "migrate") {
       const { migrateLocalStore } = await import("./broker.mjs");
       const result = await migrateLocalStore({ root: flags.root, to: Number(flags.to), backup: flags.backup, ...(flags.config ? { configFile: flags.config } : {}) });
@@ -316,21 +274,56 @@ function methodArgs(command, positional, flags, envelope) {
 
 function pick(source, keys) { return Object.fromEntries(keys.filter((key) => source[key] !== undefined).map((key) => [key, source[key]])); }
 
-async function serve(api, flags) {
+export async function copyViewerToken(tokenFile, { env = process.env, signal } = {}) {
+  if (!env.WAYLAND_DISPLAY || !env.XDG_RUNTIME_DIR || signal?.aborted) return false;
+  const { readToken } = await import("./client.mjs");
+  let token;
+  try { token = await readToken(tokenFile); } catch { return false; }
+  if (signal?.aborted) return false;
+  return new Promise((resolveCopy) => {
+    const child = spawn("wl-copy", ["--type", "text/plain", "--sensitive"], {
+      env, shell: false, stdio: ["pipe", "ignore", "ignore"],
+    });
+    let failed = false;
+    const stop = () => { failed = true; child.kill("SIGKILL"); };
+    const timer = setTimeout(stop, 2_000);
+    signal?.addEventListener("abort", stop, { once: true });
+    child.once("error", () => { failed = true; });
+    child.stdin?.on("error", () => { failed = true; });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
+      resolveCopy(!failed && code === 0 && !signal?.aborted);
+    });
+    child.stdin?.end(token);
+  });
+}
+
+async function serve(api, flags, io, profile) {
   const broker = await api.serve({ root: flags.root, configFile: flags.config });
-  let closePromise;
-  const close = () => (closePromise ??= broker.close());
+  const clipboardController = new AbortController();
   let requestStop;
-  const stopped = new Promise((resolveStop) => { requestStop = resolveStop; });
+  const stopped = new Promise((resolveStop) => { requestStop = () => { clipboardController.abort(); resolveStop(); }; });
   process.once("SIGINT", requestStop);
   process.once("SIGTERM", requestStop);
   try {
+    const address = broker.address;
+    const host = address.family === "IPv6" ? `[${address.address}]` : address.address;
+    const info = { address, ...(profile ? { url: `http://${host}:${address.port}`, tokenFile: profile.tokenFile } : {}) };
+    if (flags.json) io.stdout.write(`${JSON.stringify(info)}\n`);
+    else io.stdout.write(`${profile ? `Relay: ${info.url}\nViewer token file: ${safeText(profile.tokenFile)}` : `Listening: ${host}:${address.port}`}\n`);
+    if (profile && !flags.json && !flags["no-copy-token"]) {
+      const copied = await copyViewerToken(profile.tokenFile, { signal: clipboardController.signal });
+      if (!clipboardController.signal.aborted) io.stdout.write(copied
+        ? "Viewer token copied to clipboard. Paste it into Bearer token, then Connect.\n"
+        : "Clipboard unavailable. Copy the viewer token from the file above.\n");
+    }
     await stopped;
-    await close();
     return 0;
   } finally {
     process.removeListener("SIGINT", requestStop);
     process.removeListener("SIGTERM", requestStop);
+    await broker.close();
   }
 }
 

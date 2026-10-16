@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, lstat, rm } from "node:fs/promises";
+import { mkdtemp, lstat, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -9,6 +9,27 @@ import { fileURLToPath } from "node:url";
 import { CliInputError, parseArgs, parseStrictJson, readEnvelope } from "../src/cli.mjs";
 
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+
+test("npm start uses the existing broker CLI", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(manifest.scripts.start, "node src/cli.mjs serve");
+});
+
+test("bare serve selects the private local profile", () => {
+  const parsed = parseArgs(["serve"]);
+  assert.equal(parsed.flags.root, ".local/store");
+  assert.equal(parsed.flags.config, ".local/relay.json");
+  assert.equal(parsed.defaultLocal, true);
+});
+
+test("serve does not mix local defaults with partial custom selectors", () => {
+  assert.throws(() => parseArgs(["serve", "--root", "custom"]), CliInputError);
+  assert.throws(() => parseArgs(["serve", "--config", "custom.json"]), CliInputError);
+  const parsed = parseArgs(["serve", "--root", "custom", "--config", "custom.json"]);
+  assert.equal(parsed.defaultLocal, false);
+  assert.equal(parsed.flags.root, "custom");
+  assert.equal(parsed.flags.config, "custom.json");
+});
 
 test("A17 parses repeated caps and preserves spaces and Unicode in values", () => {
   const parsed = parseArgs(["register", "worker", "--root", "/tmp/a folder/雪", "--cap", "gpu", "--cap=inspect"]);

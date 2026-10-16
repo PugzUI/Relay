@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Fault } from "./fault.mjs";
 import { parseJsonStrict } from "./config.mjs";
+import { readLinuxProcessStart } from "./process-identity.mjs";
 import { LIMITS } from "./validate.mjs";
 import { invokeClient } from "./client.mjs";
 import {
@@ -26,20 +27,9 @@ const wait = (ms, signal) => new Promise((resolve, reject) => {
 const randomWait = (min, max) => Math.min(max, Math.floor(min + Math.random() * Math.max(1, max - min + 1)));
 const outcomeOf = (value) => value && typeof value === "object" && Object.hasOwn(value, "result") ? value.result : value;
 
-async function processStart(pid) {
-  if (process.platform !== "linux") return null;
-  try {
-    let stat;
-    try { stat = await readFile(`/proc/${pid}/stat`, "utf8"); }
-    catch (error) { return error.code === "ENOENT" ? false : null; }
-    const boot = await readFile("/proc/sys/kernel/random/boot_id", "utf8");
-    const end = stat.lastIndexOf(")"); const fields = stat.slice(end + 2).trim().split(/\s+/);
-    return end >= 0 && fields.length >= 20 && /^\d+$/.test(fields[19]) ? `${boot.trim()}:${fields[19]}` : null;
-  } catch { return null; }
-}
 async function reconcileHandle(handle) {
   if (!handle || handle.platform !== "linux" || !Number.isSafeInteger(handle.pid) || handle.pid < 1 || typeof handle.processStart !== "string" || typeof handle.nonce !== "string") return null;
-  const current = await processStart(handle.pid);
+  const current = await readLinuxProcessStart(handle.pid);
   if (current === false || current && current !== handle.processStart) return false;
   if (!current) return null;
   try {
@@ -57,24 +47,26 @@ function validateOptions(options) {
 function localClaim(relay, sid, requestId, options) {
   return dispatchLocalPool(relay, { rid: requestId, op: "claim", args: { sid, options } });
 }
-function remoteCall(client, requestId, op, args) {
-  return invokeClient(client, { rid: requestId, op, args, deadline: performance.now() + 10000 });
+function remoteCall(pool, client, requestId, op, args, signal = pool.abort.signal) {
+  const requestSignal = signal === pool.abort.signal ? signal : AbortSignal.any([pool.abort.signal, signal]);
+  return invokeClient(client, { rid: requestId, op, args, deadline: performance.now() + 10000, signal: requestSignal });
 }
 
-async function claimAt(pool, input, remote, board, kind) {
+async function claimAt(pool, input, remote, board, kind, signal = pool.abort.signal) {
+  if (pool.closed || signal.aborted) return { state: "skipped" };
   const sid = remote ? input.hubSid : input.localSid;
   const worker = input.worker;
-  if (!board && !pool.pendingMessages.has(worker) && pool.pendingMessages.size >= 512) fail("full", "Pool message recovery capacity is full");
+  if (kind === "msg" && !pool.pendingMessages.has(worker) && pool.pendingMessages.size >= 512) fail("full", "Pool message recovery capacity is full");
   const requestId = rid(); const authority = remote ? pool.hub?.authority : pool.local.authority;
   if (!authority || !sid) return { state: "skipped" };
-  if (!board) {
+  if (kind === "msg") {
     try {
-      const result = remote ? await remoteCall(pool.hub, requestId, "claim", { sid, options: { kind } }) : await localClaim(pool.local, sid, requestId, { kind });
+      const result = remote ? await remoteCall(pool, pool.hub, requestId, "claim", { sid, options: { kind } }, signal) : await localClaim(pool.local, sid, requestId, { kind });
       const lease = outcomeOf(result);
       pool.pendingMessages.delete(worker);
       return lease ? { state: "claimed", kind, rid: requestId, authority, board: null, lease } : { state: "empty" };
     } catch (error) {
-      if (remote && error instanceof Fault && error.code === "unavailable" && !error.context?.id) return { state: "skipped" };
+      if (error instanceof Fault && error.code === "rate") return { state: "rate" };
       if (error instanceof Fault && ["unavailable", "timeout", "uncertain"].includes(error.code)) {
         pool.pendingMessages.set(worker, { worker, sid, remote, authority, rid: requestId, kind });
         return { state: "uncertain", rid: requestId, authority, board: null, mid: null, lease: null };
@@ -90,7 +82,8 @@ async function claimAt(pool, input, remote, board, kind) {
   try { reserveCapacity(pool.local, reserve); }
   catch (error) { if (error instanceof Fault && ["full", "busy"].includes(error.code)) return { state: "empty" }; throw error; }
   try {
-    const result = remote ? await remoteCall(pool.hub, requestId, "claim", { sid: selectedSid, options: { board } }) : await localClaim(pool.local, selectedSid, requestId, { board });
+    const claimOptions = board === null ? { kind: "work" } : { board };
+    const result = remote ? await remoteCall(pool, pool.hub, requestId, "claim", { sid: selectedSid, options: claimOptions }, signal) : await localClaim(pool.local, selectedSid, requestId, claimOptions);
     const lease = outcomeOf(result);
     if (!lease) {
       resolveCapacity(pool.local, { worker, rid: requestId, proof: { kind: "claim", rid: requestId, authority, outcome: "empty" } });
@@ -99,14 +92,11 @@ async function claimAt(pool, input, remote, board, kind) {
     bindCapacity(pool.local, { worker, rid: requestId, authority, lease });
     return { state: "claimed", kind, rid: requestId, authority, board, lease };
   } catch (error) {
-    if (remote && error instanceof Fault && error.code === "unavailable" && !error.context?.id) {
-      resolveCapacity(pool.local, { worker, rid: requestId, proof: { kind: "claim", rid: requestId, authority, outcome: "refused" } });
-      return { state: "skipped" };
-    }
     if (error instanceof Fault && ["timeout", "uncertain", "unavailable"].includes(error.code)) return { state: "uncertain", rid: requestId, authority, board, mid: null, lease: null };
     // A returned typed refusal means no claim was accepted; Core checks the exact row tuple.
     if (error instanceof Fault) {
       resolveCapacity(pool.local, { worker, rid: requestId, proof: { kind: "claim", rid: requestId, authority, outcome: "refused" } });
+      if (error.code === "rate") return { state: "rate" };
       if (remote && ["auth", "denied", "unavailable"].includes(error.code)) return { state: "skipped" };
       if (["full", "busy", "board", "denied", "session"].includes(error.code)) return { state: "empty" };
     }
@@ -114,34 +104,40 @@ async function claimAt(pool, input, remote, board, kind) {
   }
 }
 
-async function onePass(pool, input) {
-  const localMsg = await claimAt(pool, input, false, null, "msg");
-  if (localMsg.state === "claimed" || localMsg.state === "uncertain") return localMsg;
-  if (pool.hub && input.hubSid) {
-    const hubMsg = await claimAt(pool, input, true, null, "msg");
-    if (hubMsg.state === "claimed" || hubMsg.state === "uncertain") return hubMsg;
+async function onePass(pool, input, signal) {
+  const sources = [
+    [false, null, "msg"],
+    [true, null, "msg"],
+    [false, null, "work"],
+    [true, null, "work"],
+    [false, `host:${pool.local.device.id}`, "work"],
+    [true, "bounty", "work"],
+  ];
+  for (let offset = 0; offset < sources.length; offset++) {
+    const index = (pool.sourceCursor + offset) % sources.length;
+    const result = await claimAt(pool, input, ...sources[index], signal);
+    if (result.state === "claimed" || result.state === "uncertain" || result.state === "rate") {
+      pool.sourceCursor = result.state === "rate" ? index : (index + 1) % sources.length;
+      return result;
+    }
   }
-  const localBoard = await claimAt(pool, input, false, `host:${pool.local.device.id}`, "work");
-  if (localBoard.state === "claimed" || localBoard.state === "uncertain") return localBoard;
-  if (pool.hub && input.hubSid) {
-    const hubBoard = await claimAt(pool, input, true, "bounty", "work");
-    if (hubBoard.state === "claimed" || hubBoard.state === "uncertain") return hubBoard;
-  }
+  pool.sourceCursor = (pool.sourceCursor + 1) % sources.length;
   return null;
 }
 
-async function retryPendingMessage(pool, pending) {
+async function retryPendingMessage(pool, pending, signal = pool.abort.signal) {
   const client = pending.remote ? authorityClient(pool, pending.authority) : null;
   if (client === undefined || pending.remote && !client) return { state: "uncertain", rid: pending.rid, authority: pending.authority, board: null, mid: null, lease: null };
   try {
     const result = client
-      ? await remoteCall(client, pending.rid, "claim", { sid: pending.sid, options: { kind: pending.kind } })
+      ? await remoteCall(pool, client, pending.rid, "claim", { sid: pending.sid, options: { kind: pending.kind } }, signal)
       : await localClaim(pool.local, pending.sid, pending.rid, { kind: pending.kind });
     const lease = outcomeOf(result);
     pool.pendingMessages.delete(pending.worker);
     return lease ? { state: "claimed", kind: pending.kind, rid: pending.rid, authority: pending.authority, board: null, lease } : { state: "empty" };
   } catch (error) {
     if (error instanceof Fault && ["unavailable", "timeout", "uncertain"].includes(error.code)) return { state: "uncertain", rid: pending.rid, authority: pending.authority, board: null, mid: null, lease: null };
+    if (error instanceof Fault && error.code === "rate") return { state: "rate", rid: pending.rid, authority: pending.authority, board: null, mid: null, lease: null };
     pool.pendingMessages.delete(pending.worker);
     if (pending.remote && error instanceof Fault && ["auth", "denied", "missing"].includes(error.code)) return { state: "skipped" };
     if (error instanceof Fault && ["full", "busy", "session", "expired", "superseded"].includes(error.code)) return { state: "empty" };
@@ -157,12 +153,12 @@ function authorityClient(pool, authority) {
 function resolveCall(pool, row) {
   return authorityClient(pool, row.authority);
 }
-async function attempt(pool, row) {
+async function attempt(pool, row, signal = pool.abort.signal) {
   const client = resolveCall(pool, row);
   if (client === undefined) return null;
   if (client === null) return inspectAttempt(pool.local, { sid: row.remoteSid && row.authority !== pool.local.authority ? row.remoteSid : row.localSid, lease: row.lease }, null);
   if (!client || !row.remoteSid) return null;
-  return outcomeOf(await remoteCall(client, rid(), "attempt", { sid: row.remoteSid, lease: row.lease }));
+  return outcomeOf(await remoteCall(pool, client, rid(), "attempt", { sid: row.remoteSid, lease: row.lease }, signal));
 }
 function terminal(state) { return ["done", "failed", "rejected", "released", "expired", "superseded"].includes(state); }
 async function recover(pool, input) {
@@ -174,7 +170,8 @@ async function recover(pool, input) {
       const sid = row.authority === pool.local.authority ? row.localSid : row.remoteSid;
       if (!sid) continue;
       try {
-        const result = client ? await remoteCall(client, row.rid, "claim", { sid, options: { board: row.board } }) : await localClaim(pool.local, sid, row.rid, { board: row.board });
+        const options = row.board === null ? { kind: "work" } : { board: row.board };
+        const result = client ? await remoteCall(pool, client, row.rid, "claim", { sid, options }, input.signal) : await localClaim(pool.local, sid, row.rid, options);
         const lease = outcomeOf(result);
         if (lease) {
           if (lease.sid !== sid || lease.mid === undefined) continue;
@@ -184,8 +181,11 @@ async function recover(pool, input) {
         }
         else resolveCapacity(pool.local, { worker: row.worker, rid: row.rid, proof: { kind: "claim", rid: row.rid, authority: row.authority, outcome: "empty" } });
       } catch (error) {
+        if (error instanceof Fault && error.code === "rate") return { state: "rate" };
         if (error instanceof Fault && ["timeout", "uncertain", "unavailable"].includes(error.code)) continue;
-        if (error instanceof Fault && ["full", "busy", "board"].includes(error.code)) resolveCapacity(pool.local, { worker: row.worker, rid: row.rid, proof: { kind: "claim", rid: row.rid, authority: row.authority, outcome: "refused" } });
+        if (error instanceof Fault && ["full", "busy", "board"].includes(error.code)) {
+          resolveCapacity(pool.local, { worker: row.worker, rid: row.rid, proof: { kind: "claim", rid: row.rid, authority: row.authority, outcome: "refused" } });
+        }
         else throw error;
       }
     } else if (row.state === "held") {
@@ -196,14 +196,14 @@ async function recover(pool, input) {
           if (client !== undefined && sid) {
             const op = row.settleOutcome === "release" ? "release" : "ack";
             const args = op === "release" ? { sid, lease: row.lease } : { sid, lease: row.lease, outcome: row.settleOutcome };
-            if (client) await remoteCall(client, row.settleRid, op, args);
+            if (client) await remoteCall(pool, client, row.settleRid, op, args);
             else await dispatchLocalPool(pool.local, { rid: row.settleRid, op, args });
             resolveCapacity(pool.local, { worker: row.worker, rid: row.rid, proof: { kind: "attempt", rid: row.rid, authority: row.authority, mid: row.mid, lease: row.lease, epoch: row.epoch, state: row.settleOutcome === "release" ? "released" : row.settleOutcome } });
             pool.dispatched.delete(row.rid);
             continue;
           }
         }
-        const status = await attempt(pool, row);
+        const status = await attempt(pool, row, input.signal);
         if (status && terminal(status.state) && status.mid === row.mid && status.lease === row.lease && status.epoch === row.epoch) {
           resolveCapacity(pool.local, { worker: row.worker, rid: row.rid, proof: { kind: "attempt", rid: row.rid, authority: row.authority, mid: row.mid, lease: row.lease, epoch: row.epoch, state: status.state } });
           pool.dispatched.delete(row.rid);
@@ -215,12 +215,16 @@ async function recover(pool, input) {
         if (!sid || status.sid !== sid) continue;
         const client = resolveCall(pool, row);
         if (client === undefined) continue;
-        const result = client ? await remoteCall(client, row.rid, "claim", { sid, options: { board: row.board } }) : await localClaim(pool.local, sid, row.rid, { board: row.board });
+        const options = row.board === null ? { kind: "work" } : { board: row.board };
+        const result = client ? await remoteCall(pool, client, row.rid, "claim", { sid, options }, input.signal) : await localClaim(pool.local, sid, row.rid, options);
         const lease = outcomeOf(result);
         if (!lease || lease.mid !== row.mid || lease.id !== row.lease || lease.epoch !== row.epoch || lease.sid !== sid) continue;
         pool.dispatched.add(row.rid);
         return { state: "claimed", kind: "work", rid: row.rid, authority: row.authority, board: row.board, lease };
-      } catch (error) { if (!(error instanceof Fault && ["timeout", "uncertain", "unavailable"].includes(error.code))) throw error; }
+      } catch (error) {
+        if (error instanceof Fault && error.code === "rate") return { state: "rate" };
+        if (!(error instanceof Fault && ["timeout", "uncertain", "unavailable"].includes(error.code))) throw error;
+      }
     }
   }
 }
@@ -240,7 +244,7 @@ async function reconcileLaunches(pool) {
 export function createPool(options) {
   validateOptions(options);
   if (pools.has(options.local)) fail("active", "A Pool already owns this local store");
-  const pool = { ...options, storeRoot: relayRoot(options.local), closed: false, loops: new Set(), loopTasks: new Set(), children: new Map(), launchRows: new Map(), pendingMessages: new Map(), dispatched: new Set(), authority: options.local.authority };
+  const pool = { ...options, storeRoot: relayRoot(options.local), closed: false, sourceCursor: 0, loops: new Set(), loopTasks: new Set(), children: new Map(), launchRows: new Map(), pendingMessages: new Map(), claiming: new Set(), dispatched: new Set(), authority: options.local.authority };
   pool.abort = new AbortController();
   pools.set(options.local, pool);
   pool.startupError = null;
@@ -254,12 +258,20 @@ export function createPool(options) {
   });
 }
 
-async function claimPool(pool, input) {
+async function claimPool(pool, input, signal = pool.abort.signal) {
   if (pool.closed) fail("unavailable", "Pool is closed");
   if (!object(input) || typeof input.worker !== "string" || typeof input.localSid !== "string" || input.hubSid !== undefined && typeof input.hubSid !== "string") fail("input", "Pool worker input is invalid");
+  if (pool.claiming.has(input.worker)) return null;
+  pool.claiming.add(input.worker);
+  try { return await claimWorker(pool, input, signal); }
+  finally { pool.claiming.delete(input.worker); }
+}
+
+async function claimWorker(pool, input, signal) {
   const pending = pool.pendingMessages.get(input.worker);
   if (pending) {
-    const result = await retryPendingMessage(pool, pending);
+    const result = await retryPendingMessage(pool, pending, signal);
+    if (result.state === "rate") return result;
     if (result.state !== "empty" && result.state !== "skipped") return result;
   }
   const active = listCapacity(pool.local, { worker: input.worker });
@@ -267,23 +279,23 @@ async function claimPool(pool, input) {
     const row = active[0];
     return row.state === "reserved" ? { state: "uncertain", rid: row.rid, authority: row.authority, board: row.board, mid: row.mid, lease: row.lease } : null;
   }
-  return onePass(pool, input);
+  return onePass(pool, input, signal);
 }
 
 async function settlePool(pool, input) {
   if (pool.closed) fail("unavailable", "Pool is closed");
   if (!object(input) || typeof input.worker !== "string" || !object(input.item) || input.item.state !== "claimed" || !["done", "failed", "rejected", "release"].includes(input.outcome)) fail("input", "Pool settlement is invalid");
   const item = input.item; const client = authorityClient(pool, item.authority);
-  if (client === undefined || !item.board) fail("input", "Only board work uses Pool settlement");
+  if (client === undefined || item.kind !== "work") fail("input", "Only reserved work uses Pool settlement");
   const active = listCapacity(pool.local, { worker: input.worker }).find((row) => row.rid === item.rid && row.authority === item.authority && row.lease === item.lease.id);
   if (!active) fail("lease", "Pool reservation is unavailable");
   const expectedSid = active.authority === pool.local.authority ? active.localSid : active.remoteSid;
-  if (active.state !== "held" || active.board !== item.board || active.mid !== item.lease.mid || active.epoch !== item.lease.epoch || item.lease.sid !== expectedSid) fail("lease", "Pool settlement does not match its saved reservation");
+  if (active.state !== "held" || active.board !== item.board || active.mid !== item.lease.mid || active.epoch !== item.lease.epoch || item.lease.sid !== expectedSid || item.lease.id !== active.lease) fail("lease", "Pool settlement does not match its saved reservation");
   const settleRid = active.settleRid ?? rid();
   beginCapacitySettlement(pool.local, { worker: input.worker, rid: item.rid, authority: item.authority, settleRid, outcome: input.outcome });
   try {
     const args = input.outcome === "release" ? { sid: item.lease.sid, lease: item.lease.id } : { sid: item.lease.sid, lease: item.lease.id, outcome: input.outcome };
-    const result = client ? outcomeOf(await remoteCall(client, settleRid, input.outcome === "release" ? "release" : "ack", args)) : outcomeOf(dispatchLocalPool(pool.local, { rid: settleRid, op: input.outcome === "release" ? "release" : "ack", args }));
+    const result = client ? outcomeOf(await remoteCall(pool, client, settleRid, input.outcome === "release" ? "release" : "ack", args)) : outcomeOf(dispatchLocalPool(pool.local, { rid: settleRid, op: input.outcome === "release" ? "release" : "ack", args }));
     resolveCapacity(pool.local, { worker: input.worker, rid: item.rid, proof: { kind: "attempt", rid: item.rid, authority: item.authority, mid: item.lease.mid, lease: item.lease.id, epoch: item.lease.epoch, state: input.outcome === "release" ? "released" : input.outcome } });
     pool.dispatched.delete(item.rid);
     return { state: "settled", receipt: result };
@@ -307,15 +319,22 @@ async function startPool(pool, input) {
     while (!pool.closed && !signal.aborted) {
       try {
         let item = await recover(pool, workerInput);
+        if (item?.state === "rate") { delay = Math.min(pool.maxBackoffMs, Math.max(pool.minBackoffMs, delay * 2)); await wait(randomWait(delay, pool.maxBackoffMs), signal); continue; }
         if (!item && listCapacity(pool.local, { worker: input.worker }).length) {
           delay = Math.min(pool.maxBackoffMs, Math.max(pool.minBackoffMs, delay * 2));
           await wait(randomWait(delay, pool.maxBackoffMs), signal);
           continue;
         }
-        item ??= await claimPool(pool, workerInput);
+        item ??= await claimPool(pool, workerInput, signal);
+        if (item?.state === "rate") { delay = Math.min(pool.maxBackoffMs, Math.max(pool.minBackoffMs, delay * 2)); await wait(randomWait(delay, pool.maxBackoffMs), signal); continue; }
         if (!item) { delay = pool.pollMs; await wait(randomWait(delay, Math.min(pool.maxBackoffMs, Math.max(delay, pool.minBackoffMs))), signal); continue; }
         if (item.state === "uncertain") { delay = Math.min(pool.maxBackoffMs, Math.max(pool.minBackoffMs, delay * 2)); await wait(randomWait(delay, pool.maxBackoffMs), signal); continue; }
-        if (item.board) pool.dispatched.add(item.rid);
+        if (signal.aborted || pool.closed) {
+          if (item.kind === "work") await settlePool(pool, { worker: input.worker, item, outcome: "release" });
+          else await settleAddressedUntilKnown(pool, item, "release");
+          break;
+        }
+        if (item.kind === "work") pool.dispatched.add(item.rid);
         delay = pool.pollMs;
         let result;
         try {
@@ -324,8 +343,8 @@ async function startPool(pool, input) {
         }
         catch (error) {
           try {
-            if (item.board && item.kind === "work") await settlePool(pool, { worker: input.worker, item, outcome: "release" });
-            else await settleAddressed(pool, item, "release");
+            if (item.kind === "work") await settlePool(pool, { worker: input.worker, item, outcome: "release" });
+            else await settleAddressedUntilKnown(pool, item, "release");
           } catch (cleanup) {
             if (error && typeof error === "object") {
               try { Object.defineProperty(error, "cleanupError", { value: cleanup, enumerable: false }); } catch {}
@@ -333,10 +352,10 @@ async function startPool(pool, input) {
           }
           throw error;
         }
-        if (item.board && item.kind === "work") {
+        if (item.kind === "work") {
           const settled = await settlePool(pool, { worker: input.worker, item, outcome: result });
           if (settled.state === "uncertain") { await wait(pool.minBackoffMs, signal); continue; }
-        } else await settleAddressedUntilKnown(pool, item, result, signal);
+        } else await settleAddressedUntilKnown(pool, item, result);
       } catch (error) {
         if (signal.aborted || pool.closed) break;
         if (!(error instanceof Fault && ["timeout", "uncertain", "unavailable", "busy", "full"].includes(error.code))) throw error;
@@ -355,18 +374,18 @@ async function settleAddressed(pool, item, outcome, requestId = rid()) {
   const client = authorityClient(pool, item.authority);
   if (client === undefined) return;
   const args = outcome === "release" ? { sid: item.lease.sid, lease: item.lease.id } : { sid: item.lease.sid, lease: item.lease.id, outcome };
-  if (client) await remoteCall(client, requestId, outcome === "release" ? "release" : "ack", args);
+  if (client) await remoteCall(pool, client, requestId, outcome === "release" ? "release" : "ack", args);
   else await dispatchLocalPool(pool.local, { rid: requestId, op: outcome === "release" ? "release" : "ack", args });
 }
 
-async function settleAddressedUntilKnown(pool, item, outcome, signal) {
+async function settleAddressedUntilKnown(pool, item, outcome) {
   const requestId = rid();
   let delayMs = pool.minBackoffMs;
   for (;;) {
     try { return await settleAddressed(pool, item, outcome, requestId); }
     catch (error) {
       if (!(error instanceof Fault && ["timeout", "uncertain", "unavailable"].includes(error.code))) throw error;
-      await wait(randomWait(delayMs, pool.maxBackoffMs), signal);
+      await wait(randomWait(delayMs, pool.maxBackoffMs), pool.abort.signal);
       delayMs = Math.min(pool.maxBackoffMs, Math.max(pool.minBackoffMs, delayMs * 2));
     }
   }
@@ -435,7 +454,7 @@ async function launchOne(pool, config, primeSid, demand, readySpare) {
   };
   const handlePromise = (async () => {
     for (let i = 0; i < 50; i++) {
-      const processStartId = await processStart(child.pid);
+      const processStartId = await readLinuxProcessStart(child.pid);
       if (processStartId) {
         const handle = { platform: process.platform, pid: child.pid, processStart: processStartId, nonce };
         if (await handleMatches(handle)) return handle;

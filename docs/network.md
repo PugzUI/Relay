@@ -2,8 +2,11 @@
 
 Network mode is optional. Local `setup` and `open` start no listener. Only
 `serve` binds a listener, after it validates the selected root, role, config,
-credentials, transport, and port. Default application port is `4200`; an
-occupied port fails rather than selecting a fallback.
+credentials, transport, and port. Bare CLI `serve` / `npm start` first prepares
+an ignored private `.local/` host profile; explicit root/config pairs use only
+the supplied existing profile. Local defaults enable no hub, pool or native
+delivery and never overwrite existing credentials. Default application port is
+`4200`; an occupied port fails rather than selecting a fallback.
 
 | Mode | Listener | Required boundary |
 |---|---|---|

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { open as openFile } from "node:fs/promises";
-import { constants, openSync, fstatSync, readFileSync, closeSync } from "node:fs";
+import { constants, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { Fault } from "./fault.mjs";
 import { parseJsonStrict } from "./config.mjs";
 
@@ -131,27 +131,51 @@ function decodeRegistry(stat, data) {
   return Object.freeze({ version: 1, credentials: Object.freeze(credentials), digestIndex });
 }
 
+function registryBuffer(stat) {
+  if (!stat.isFile() || stat.size > 1_048_576 || process.platform !== "win32" && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)) {
+    throw new Fault("unavailable", "Credential registry is unavailable or unsafe");
+  }
+  // One extra byte detects growth without allowing unbounded reads after stat.
+  return Buffer.alloc(stat.size + 1);
+}
+
 export async function loadRegistry(filePath) {
   let file;
-  try { file = await openFile(filePath, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW)); }
+  let buffer;
+  try { file = await openFile(filePath, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK)); }
   catch { throw new Fault("unavailable", "Credential registry is unavailable or unsafe"); }
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.size > 1_048_576 || process.platform !== "win32" && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)) throw new Fault("unavailable", "Credential registry is unavailable or unsafe");
-    return decodeRegistry(stat, await file.readFile());
-  } finally { await file.close(); }
+    buffer = registryBuffer(stat);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size, null);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    if (size > stat.size) throw new Fault("unavailable", "Credential registry changed while reading");
+    return decodeRegistry(stat, buffer.subarray(0, size));
+  } finally { buffer?.fill(0); await file.close(); }
 }
 
 export function loadRegistrySync(filePath) {
   let fd;
+  let buffer;
   try {
-    fd = openSync(filePath, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
+    fd = openSync(filePath, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > 1_048_576 || process.platform !== "win32" && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)) throw new Fault("unavailable", "Credential registry is unavailable or unsafe");
-    return decodeRegistry(stat, readFileSync(fd));
+    buffer = registryBuffer(stat);
+    let size = 0;
+    while (size < buffer.length) {
+      const count = readSync(fd, buffer, size, buffer.length - size, null);
+      if (!count) break;
+      size += count;
+    }
+    if (size > stat.size) throw new Fault("unavailable", "Credential registry changed while reading");
+    return decodeRegistry(stat, buffer.subarray(0, size));
   }
   catch (error) { if (error instanceof Fault) throw error; throw new Fault("unavailable", "Credential registry is unavailable or unsafe"); }
-  finally { if (fd !== undefined) closeSync(fd); }
+  finally { buffer?.fill(0); if (fd !== undefined) closeSync(fd); }
 }
 
 export function authenticate(snapshot, authorizationHeader) {

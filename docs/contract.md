@@ -99,11 +99,10 @@ frozen while lane work is in progress.
 | CLI/QA/DOCS | `src/cli.mjs`, `examples/*`, `tests/fixtures/ui/*`, `README.md`, `docs/api.md`, `docs/storage.md`, `docs/limits.md`, `docs/network.md`, `docs/boards.md`, `docs/topology.md`; CLI/example tests |
 | UI | `ui/*` and UI tests |
 
-Foundation created the package boundaries and contracts; lanes own only their
-listed paths. `src/index.mjs` intentionally re-exports implementation modules
-that do not exist yet. Until all lane modules land, package import is expected
-to fail and `npm run check` reports the missing contract modules. No placeholder
-implementation is exported as success.
+Foundation owns the package boundaries and contracts; parallel lanes own only
+their assigned paths. The implementation modules are present and package import
+must succeed. `npm run check` verifies module presence, declarations and package
+contents; it does not establish native runtime qualification.
 
 ## 3. Shared data and persistence
 
@@ -125,7 +124,7 @@ authorities are different principals for lease ownership.
 | Receipt | `{mid,lease,sid,epoch,outcome,time}`; one accepted terminal acknowledgement for a leased item. Board Inbox admission uses its admission receipt and never invents a lease. |
 | Send key | `{from,key,mid,hash,until}`; unique sender/key during retention; fingerprint covers target, board, exact kind/body, needs, and series. |
 | Audit | `{seq,time,type,worker,sid,mid,lease,code,from,to}`; payload-free; `from/to` are stable endpoint IDs or null. |
-| Meta | Schema version, immutable `init`, authority ID, device identity, immutable `role=host|hub`, persisted lifetime/retention/capacity policy, clock high-water mark, audit-pruned counts, and monotonic slot counters. |
+| Meta | Schema version, immutable `init`, authority ID, device identity, immutable `role=host|hub`, persisted lifetime/retention/capacity policy, clock high-water mark, audit-pruned counts, and monotonic slot/message-sequence counters. |
 | Principal binding | Hub-local exact device ID/name, principal ID, and permitted runtime namespaces. It is administration state, never supplied as an authority claim by a remote request. |
 | RPC receipt | `{principal,rid,op,hash,committed,until,worker,sid,epoch,mid,lease,result_ref}`; unique principal/request ID; references outcomes and stores only minimal non-payload result metadata. |
 | Capacity reservation | Exact `Reservation` in §7; unique active row per worker; keeps the authority, board, sessions, claim request, lease, and settlement request needed to recover uncertainty. |
@@ -471,7 +470,7 @@ this exact envelope:
 
 `rid` is 1–128 visible ASCII `[A-Za-z0-9._:-]`. `op` is one of `register`,
 `enroll`, `join`, `resume`, `renew`, `leave`, `send`, `post`, `claim`, `touch`,
-`ack`, `release`, `get`, `list`, `stats`, `audit`, `report`, `snapshot`, or the
+`ack`, `release`, `get`, `list`, `pending`, `stats`, `audit`, `report`, `snapshot`, or the
 internal read-only `attempt` operation. `attempt` accepts only `{sid,lease}`
 and returns status for that exact attempt to its current owning principal; it
 never returns a body or mutates state. `setup`, `purge`, `close`, filesystem
@@ -528,9 +527,9 @@ dispatchRpc(relay, { authorization, rid, op, args, beforeCommit }) -> {
 CORE owns one `BEGIN IMMEDIATE`, clock validation, operation dispatch, and
 RPC-journal insert. `authorization.operation` must equal `op`; the principal
 comes only from the current Broker-authenticated `Authorization`, never from
-`args`. For a mutation it first admits journal capacity, checks a
-retained `{principal,rid}`, compares SHA-256 of canonical `{v,op,args}`, then
-executes the same internal operation handler used by `Relay` and inserts its
+`args`. For a mutation it first checks a retained `{principal,rid}` and compares
+SHA-256 of canonical `{v,op,args}`. Only a new request must admit journal
+capacity before executing the same internal operation handler used by `Relay` and inserting its
 minimal receipt reference before one commit. Before a successful write or
 matching replay result is returned, CORE invokes the trusted synchronous
 `beforeCommit()` callback after `BEGIN IMMEDIATE` has acquired the SQLite write
@@ -557,8 +556,10 @@ rejects a different principal's SID. The journal also records original worker, s
 message, and lease references needed to validate replay. `send/post` replay
 returns original ID/init without adding a row. `join/resume/renew` returns only
 the original same-epoch session outcome; a superseded epoch is refused. `claim`
-replay returns body only if that exact attempt is still live/current; it never
-claims a replacement. Terminal `ack/leave/release` replay returns its original
+replay returns a recorded empty result as `null`; a nonempty replay returns its
+body only if that exact attempt is still live/current. It never claims a
+replacement. Retained matching outcomes are looked up before new-entry
+capacity checks, while authorization and ownership checks still apply. Terminal `ack/leave/release` replay returns its original
 immutable receipt after principal, original owner, and non-superseded epoch
 checks, even if the accepted operation ended/released that state. It never
 reopens, re-acks, re-releases, or mutates a later attempt. A repeated `renew`
@@ -578,16 +579,17 @@ commit, and qualification must measure synchronous blocking latency.
 
 ## 7. Board pool, reservation, and launch seams
 
-The src/pool.mjs controller is the only automatic board-work claimant. One
-claim pass checks local addressed msg, hub addressed msg, the local host board,
-then hub bounty. Message claims do not reserve job capacity. A worker may hold
-at most one active board assignment across the local and hub authorities.
+The `src/pool.mjs` controller is the automatic work scheduler. Bounded claim
+passes rotate across local and hub addressed messages, local and hub addressed
+work, the local host board and hub bounty. Addressed `msg` claims do not reserve
+job capacity. A worker may hold at most one reserved or active work assignment
+across the local and hub authorities.
 Direct Relay.claim() remains a raw lease API and cannot establish physical
 resource availability; automatic board work uses Pool.
 
 ### Capacity reservation
 
-Before a board claim, Pool reserves in the worker's local Relay store. CORE
+Before an addressed or board work claim, Pool reserves in the worker's local Relay store. CORE
 owns the reservation rows and transactions and exports these exact seams:
 
 ```js
@@ -605,7 +607,7 @@ interface Reservation {
   worker: WorkerAddress;
   localSid: string;
   remoteSid: string | null;
-  board: BoardId;
+  board: BoardId | null;
   rid: string;
   authority: string;
   state: "reserved" | "held";
@@ -620,7 +622,7 @@ interface ReservationInput {
   worker: WorkerAddress;
   localSid: string;
   remoteSid: string | null;
-  board: BoardId;
+  board: BoardId | null;
   rid: string;
   authority: string;
   maxJobs: number;
@@ -648,18 +650,21 @@ interface ReservationResolveInput {
 }
 ```
 
-authority is the exact opaque ID of the store that owns the selected board.
-For a local board remoteSid is null and localSid is used for the claim; for a
-hub board remoteSid is the exact hub session. rid is generated before reserve
+authority is the exact opaque ID of the store that owns the selected work.
+For local work remoteSid is null and localSid is used for the claim; for hub
+work remoteSid is the exact hub session. `board:null` selects addressed work
+for the saved worker. CORE privately encodes this as `@addressed` in the
+existing non-null storage column and decodes it back to null; that marker is
+not a board ID and must never enter a claim RPC. rid is generated before reserve
 and remains the exact RPC request ID for retries. The row also persists the
-selected board and session so a restart can reconstruct the original claim
+selected work source and session so a restart can reconstruct the original claim
 arguments. There is one unresolved or held row per worker. An identical reserve
 is idempotent; a changed tuple conflicts. Bind changes reserved to held only
 after an accepted lease response and records its exact mid, lease ID, epoch,
 and until. The core reads its own guarded transaction time; callers never
 provide expiry time. `maxJobs` is the validated controller limit for this local
 root, 1–128. In the same `BEGIN IMMEDIATE`, reserve refuses `full` when the
-count of active `reserved` plus `held` board rows has reached that limit.
+count of active `reserved` plus `held` work rows has reached that limit.
 SettlementStart persists one settlement rid and outcome before ack/release
 dispatch. Repeats must use that same tuple.
 
@@ -667,7 +672,8 @@ listCapacity returns every active row, including unresolved reservations. On
 Pool start, each row is checked against the configured fixed local/hub
 authorities; a missing or changed authority does not retarget work and remains
 blocked as uncertain. For a reserved row, Pool retries the original claim with
-the exact saved rid, authority, board, and session. For a held row, Pool checks
+the exact saved rid, authority, source, and session. A null board reconstructs
+`{kind:"work"}`; a board ID reconstructs `{board}`. For a held row, Pool checks
 the exact saved lease with the internal attempt operation. It resolves only
 after a definitive empty/refusal response or an authoritative terminal state
 (`done|failed|rejected`), `released`, `expired`, or `superseded` attempt result.
@@ -675,9 +681,11 @@ A timeout, lost response,
 client clock, or elapsed until alone is not proof and never frees capacity.
 resolveCapacity verifies the proof's worker, request ID, authority, message,
 lease, epoch, and state against the persisted reservation before deleting its
-active row. `maxJobs` counts `reserved` and `held` board rows so uncertainty
-cannot open a second slot. Direct addressed-message claims use the ordinary
-claim API and never consume board capacity; they do not create a capacity row.
+active row. `maxJobs` counts `reserved` and `held` work rows so uncertainty
+cannot open a second slot. Addressed `msg` claims use the ordinary claim API
+and do not create a capacity row; addressed `work` and board work share the
+same budget. Local binding validates the current authoritative lease,
+session, recipient and board rather than trusting a supplied historical tuple.
 A held lease remains reserved until exact settlement or attempt expiry is
 confirmed.
 
@@ -766,16 +774,17 @@ task data, URLs, or Relay private fields.
 `createPool` is internal and accepts one instance per local store. `serve()`
 holds the store's broker lock and is the only network owner that may construct
 the configured host Pool. A second Pool for the same `Relay` handle returns
-`active`. `claim` performs one bounded arbitration pass in this order: local
-addressed messages, hub addressed messages, the local host board, then hub
-bounty. It never claims Inbox rows from a board. An unavailable hub before a
+`active`. `claim` performs a bounded rotating arbitration pass across local
+and hub addressed messages, local and hub addressed work, the local host board
+and hub bounty. It never claims Inbox rows from a board. One worker cannot
+run concurrent claim passes; unresolved work reservations block another claim. An unavailable hub before a
 request is sent skips that source for this pass and local work remains
 eligible. An uncertain submitted claim stops before another board claim.
 
 `start` owns one sequential polling loop for the exact current local worker
 session supplied by the caller; it does not join, replace, or renew that
 session. The worker and session must be registered on `options.local`. It first
-recovers that worker's saved board reservation, then passes one accepted lease
+recovers that worker's saved work reservation, then passes one accepted lease
 at a time to `execute`. It settles only the callback's explicit
 `done|failed|rejected|release` result. If the callback throws, Pool attempts
 `release` for that exact attempt, retains any uncertain reservation, and
@@ -784,9 +793,9 @@ poll wait and is passed to an active callback; the callback must settle or
 return `release` before another item can be claimed. `start` resolves when
 cancelled or closed.
 
-Before a board claim, Pool reserves capacity on the worker's local store.
-`maxJobs` counts all active `reserved` and `held` board rows across local and
-hub authorities; message claims never consume this budget. An uncertain board
+Before a work claim, Pool reserves capacity on the worker's local store.
+`maxJobs` counts all active `reserved` and `held` work rows across local and
+hub authorities; `msg` claims never consume this budget. An uncertain work
 claim or settlement returns its original `rid` and authority and never emits a
 second activity event. `settle` persists and reuses `settleRid` after a lost
 response. Empty/refused claims and completed settlements resolve only their
@@ -1129,12 +1138,12 @@ authorize(snapshot: RegistrySnapshot, principal: Principal, operation: RpcOperat
 authorizeBoardRead(snapshot: RegistrySnapshot, principal: Principal, board: BoardId, kind: Kind, includeData: boolean) -> Authorization
 
 // NETWORK/POOL: src/config.mjs
-readConfig(configFile: string) -> BrokerConfig
+readConfig(configFile: string) -> Promise<BrokerConfig>
 
 // NETWORK/POOL: src/broker.mjs and src/client.mjs
 serve(options: BrokerOptions) -> Promise<Broker>
 connect(options: ClientOptions) -> Promise<Client>
-invokeClient(client: Client, input: { rid: string; op: RpcOperation; args: object; deadline: number }) -> Promise<RpcOutcome>
+invokeClient(client: Client, input: { rid: string; op: RpcOperation; args: object; deadline: number; signal?: AbortSignal }) -> Promise<RpcOutcome>
 
 // NETWORK/POOL: src/pool.mjs
 createPool(options: PoolOptions) -> Pool
@@ -1146,10 +1155,10 @@ Shared internal schemas:
 type PublicOperation =
   | "register" | "enroll" | "join" | "resume" | "renew" | "leave"
   | "send" | "post" | "claim" | "touch" | "ack" | "release"
-  | "get" | "list" | "stats" | "audit" | "report" | "snapshot";
+  | "get" | "list" | "pending" | "stats" | "audit" | "report" | "snapshot";
 type InternalAttemptOperation = "attempt";
 type RpcOperation = PublicOperation | InternalAttemptOperation;
-type MutationOperation = Exclude<PublicOperation, "get" | "list" | "stats" | "audit" | "snapshot">;
+type MutationOperation = Exclude<PublicOperation, "get" | "list" | "pending" | "stats" | "audit" | "snapshot">;
 interface Authorization {
   principal: Principal;
   operation: RpcOperation;
@@ -1170,6 +1179,7 @@ interface RpcArgs {
   release: { sid: string; lease: string };
   get: { id: string; options?: GetOptions };
   list: { options?: ListOptions };
+  pending: { sid: string };
   stats: Record<string, never>;
   audit: { options?: AuditOptions };
   report: { sid: string; report: ReportInput };
@@ -1257,6 +1267,7 @@ AttemptStatus or null:
 | release | {sid,lease} | ReleaseReceipt |
 | get | {id,options?} | Message or null |
 | list | {options?} | Page<Message> |
+| pending | {sid} | PendingSummary |
 | stats | {} | Stats |
 | audit | {options?} | Page<AuditEvent> |
 | report | {sid,report} | ReportReceipt |
@@ -1290,8 +1301,8 @@ settlement replay. `inspectAttempt(..., null)` is allowed only to code holding
 that local Relay handle; a non-null Authorization applies remote principal and
 session scope. Neither form returns a body.
 
-For a mutation, dispatchRpc checks journal capacity, then the principal/request
-key and canonical {v,op,args} hash, then calls that handler and inserts the
+For a mutation, dispatchRpc checks the principal/request key and canonical
+{v,op,args} hash before enforcing new-entry capacity. A new request calls the handler and inserts the
 minimal receipt/result reference in one transaction. No public mutator call
 followed by a separate journal write is allowed. RPC result references retain
 the exact Device, Message, Session, Lease, or receipt outcome needed for replay.
@@ -1449,7 +1460,7 @@ listed ranges and listener/profile settings; it cannot raise any hard cap.
 | `maxCredentials` | 256 credentials | Hard registry-entry cap |
 | `rateIdleMs` | 120,000 ms | Fixed idle-entry eviction age; limiter map is also capped at `maxCredentials` |
 | `poolMaxAgents` | 8 agents | Configurable 1–512; includes ready, starting, running, and unknown numbered local workers, not `prime` |
-| `poolMaxJobs` | 1 assignment | Configurable 1–128; held board assignments across both authorities |
+| `poolMaxJobs` | 1 assignment | Configurable 1–128; reserved and held addressed/board work across both authorities |
 | `poolPollMs` | 1,000 ms | Configurable 100–60,000 ms |
 | `poolMinBackoffMs` | 250 ms | Configurable 100–5,000 ms |
 | `poolMaxBackoffMs` | 10,000 ms | Configurable 100–60,000 ms and not less than minimum |
@@ -1508,7 +1519,7 @@ value or URL component.
 | stats / audit | `relay stats --root PATH`; `relay audit --root PATH [--after CURSOR]`; audit is bounded and payload-free. |
 | snapshot | `relay snapshot --root PATH [--device ID] [--limit N] [--after CURSOR]`; read-only, scoped topology JSON; creates no state. |
 | purge | `relay purge --root PATH --before TIME [--dry]`; local administration only. |
-| serve | `relay serve --root PATH --config FILE`; explicit foreground listener; local administration only. |
+| serve | `relay serve [--root PATH --config FILE] [--no-copy-token]`; explicit foreground listener; local administration only. Without either selector, initialize/reuse the private local host profile at `.local/store` and `.local/relay.json`, with a read-only viewer token file, loopback port 4200, no pool, hub or native delivery. After binding, human-readable local startup attempts a bounded Wayland clipboard copy via optional `wl-copy`, with the token only on stdin and a sensitive-content hint. Failure leaves the broker running and the token file intact. `--no-copy-token`, `--json` and custom profiles skip clipboard access. Custom selectors must be supplied together and never trigger provisioning. SDK `serve()` still requires an already initialized store and explicit config. |
 
 `send`/`post` read at most 65,536 encoded UTF-8 bytes plus the bounded newline
 framing, reject multiple JSON values/trailing input, and never interpolate
@@ -1709,3 +1720,32 @@ owned timers/feeds, stops new attempts, closes owned handles, and never
 acknowledges work or terminates an unowned process. Absent workers can use only
 the existing explicitly authorized local `createPool`/`ensureCapacity` and
 CORE launch ledger; remote messages never grant launch permission.
+
+
+### Opt-in native recipient consumption
+
+The OpenCode plugin accepts the existing exact options plus optional
+`consume:true`. Omission preserves notice-only behavior. Consumption adds
+native `relay_pending`, `relay_claim`, `relay_reply`, `relay_ack` and
+`relay_release` tools, scoped to the existing configured native session.
+No identity, destination, filesystem path or credential is model-controlled.
+
+The private bridge supports `delivery.recipient {bindingId,op,args}` only for
+explicitly opted-in registrations. The supervisor handle pins those calls to
+the current authority/worker/session/epoch and verifies persisted ownership.
+This adds no public broker RPC operation or consumer-package export.
+
+Runtime timers renew sessions and active leases without inference. Native
+turn completion does not acknowledge a queue item. Confirmed nonacceptance
+may retry with bounded backoff; unknown acceptance remains gated. The
+supervisor owns one poll timer and one in-flight pass; each notice reserves
+exactly its included scopes. Background hub summary reads share a 20-per-minute
+budget with fair scheduling and failure backoff. Explicit recipient reads use
+fresh authority state independently of that background budget; all operations
+remain subject to the broker's limits. Cached summaries do not authorize
+admission. Terminal delivery retention also runs before reserving attempts,
+retaining unresolved gates and active-scope deduplication evidence.
+
+See [idle recipient consumption](idle-consumer.md) for tool limits, ownership,
+reconnection boundaries and the distinction between automated SDK fixtures
+and native qualification.

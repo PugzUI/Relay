@@ -158,13 +158,16 @@ try {
   await click(".worker-node");
   await screenshot("overview-wide");
   passed("A real claim renders an orthogonal native SVG assignment link and worker inspector");
-  for (const width of [1440, 1000, 760, 390, 320]) {
+  for (const width of [1440, 1000, 760, 390, 360, 320]) {
     await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 761 });
     await cdp.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
     const geometry = await cdp.evaluate("({width:innerWidth,document:document.documentElement.scrollWidth,clipped:[...document.querySelectorAll('.topology-toolbar button,.filter-control,.section-heading select')].some(e=>{const r=e.getBoundingClientRect();return r.left<0 || r.right>innerWidth;})})");
     assert.equal(geometry.width, width);
     assert.equal(geometry.document, width);
     assert.equal(geometry.clipped, false);
+    const sizes = await cdp.evaluate("[...document.querySelectorAll('#disconnect,#refresh,#expand-all,.pager button')].map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height]})");
+    assert.equal(sizes.length, 7);
+    assert.ok(sizes.every(([w, h]) => w === 96 && h === (width <= 760 ? 44 : 36)));
     if (width === 390) await screenshot("overview-narrow");
   }
   await cdp.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
@@ -172,7 +175,16 @@ try {
   relay.post(session.id, "bounty", { msg: "Reduced-motion committed update." });
   await wait("document.querySelector('.path-pulse') !== null", "reduced-motion committed pulse");
   assert.equal(await cdp.evaluate("parseFloat(getComputedStyle(document.querySelector('.path-pulse')).animationDuration) <= .01 && getComputedStyle(document.querySelector('.path-pulse')).strokeDasharray === 'none'"), true);
-  passed("320/390/760/1000/1440px views have no document overflow or clipped toolbar controls");
+  passed("320/360/390/760/1000/1440px views have no document overflow or clipped toolbar controls; action buttons share 96px width and 36/44px height");
+  await cdp.call("Page.setFontSizes", { fontSizes: { standard: 32 } });
+  await wait("getComputedStyle(document.documentElement).fontSize === '32px'", "doubled browser default text size");
+  await cdp.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
+  const scaled = await cdp.evaluate("({width:innerWidth,scroll:document.documentElement.scrollWidth,buttons:[...document.querySelectorAll('#refresh,#expand-all')].map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height]})})");
+  assert.deepEqual(scaled, { width: 320, scroll: 320, buttons: [[192, 88], [192, 88]] });
+  await screenshot("overview-text-200");
+  await cdp.call("Page.setFontSizes", { fontSizes: { standard: 16 } });
+  await wait("getComputedStyle(document.documentElement).fontSize === '16px'", "restored browser default text size");
+  passed("200% root text sizing reflows at 320px; shared buttons scale without page overflow");
   relay.ack(session.id, lease.id, "done");
 
   await authenticate("metadata");

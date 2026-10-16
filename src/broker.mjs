@@ -15,6 +15,7 @@ import { migrateDatabase } from "./sqlite.mjs";
 import { connect, createFixedClient, invokeClient } from "./client.mjs";
 import { readConfig, parseJsonStrict } from "./config.mjs";
 import { authenticate, authorize, authorizeBoardRead, loadRegistry, loadRegistrySync } from "./auth.mjs";
+import { readLinuxProcessStart } from "./process-identity.mjs";
 
 const MAX_HEADERS = 8192;
 const MAX_BODY = 131072;
@@ -44,24 +45,10 @@ const healthyModePeer = (mode, allowed, address) => {
 };
 const randomRid = () => randomBytes(18).toString("base64url");
 
-async function processStart(pid) {
-  if (process.platform !== "linux") return null;
-  try {
-    let stat;
-    try { stat = await readFile(`/proc/${pid}/stat`, "utf8"); }
-    catch (error) { return error.code === "ENOENT" ? false : null; }
-    const boot = await readFile("/proc/sys/kernel/random/boot_id", "utf8");
-    const close = stat.lastIndexOf(")");
-    const fields = stat.slice(close + 2).trim().split(/\s+/);
-    if (close < 0 || fields.length < 20 || !/^\d+$/.test(fields[19])) return null;
-    return `${boot.trim()}:${fields[19]}`;
-  } catch { return null; }
-}
-
 async function acquireLock(root) {
   const path = join(root, "broker.lock");
   const nonce = randomBytes(24).toString("base64url");
-  const ownStart = await processStart(process.pid);
+  const ownStart = await readLinuxProcessStart(process.pid);
   if (!ownStart) throw new Fault("unavailable", "Process identity cannot be verified on this platform");
   const record = { v: 1, pid: process.pid, processStart: ownStart, nonce };
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -79,7 +66,7 @@ async function acquireLock(root) {
       bytes = await readFile(path, "utf8"); old = parseJsonStrict(bytes, 1024);
       if (!object(old) || Object.keys(old).sort().join(",") !== "nonce,pid,processStart,v" || old.v !== 1 || !Number.isSafeInteger(old.pid) || old.pid <= 0 || typeof old.nonce !== "string" || typeof old.processStart !== "string") throw new Error("invalid");
     } catch { throw new Fault("active", "Broker lock is invalid or cannot be verified"); }
-    const observed = await processStart(old.pid);
+    const observed = await readLinuxProcessStart(old.pid);
     if (observed === old.processStart) throw new Fault("active", "Another broker owns this store");
     if (observed !== false) throw new Fault("active", "Broker lock owner is ambiguous");
     let nowStat;
@@ -365,9 +352,10 @@ async function events(state, req, res, url, principal, deadline) {
   if (performance.now() >= deadline) fail("timeout", "Request deadline elapsed");
   const controller = new AbortController(); state.streams.add(controller);
   res.once("close", () => controller.abort());
-  res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
   try {
     const iterable = state.feed.subscribe({ cursor: values.cursor, authorization, signal: controller.signal });
+    res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    res.flushHeaders();
     for await (const frame of iterable) {
       if (controller.signal.aborted || state.closed) break;
       const updated = await loadRegistry(state.config.credentialsFile); state.registry = updated;
@@ -387,7 +375,7 @@ async function events(state, req, res, url, principal, deadline) {
         });
       }
     }
-  } finally { state.streams.delete(controller); if (!res.writableEnded) res.end(); }
+  } finally { state.streams.delete(controller); if (res.headersSent && !res.writableEnded) res.end(); }
 }
 
 async function staticAsset(req, res, url) {

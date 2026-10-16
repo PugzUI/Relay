@@ -25,6 +25,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "start": "node src/cli.mjs serve",
     "build:ui": "node scripts/build-ui.mjs",
     "prepack": "npm run build:ui",
     "check": "node scripts/check.mjs",

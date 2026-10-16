@@ -47,7 +47,7 @@ async function readPrivate(path, label, maxBytes) {
     return await readBounded(file, maxBytes, label);
   } finally { await file.close(); }
 }
-async function readToken(path) {
+export async function readToken(path) {
   const value = await readPrivate(path, "Token file", 45);
   try {
     let text;
@@ -156,10 +156,11 @@ function validResult(op, value) {
   return false;
 }
 
-function request(state, method, path, body, deadline, auth = true) {
+function request(state, method, path, body, deadline, auth = true, signal = state.signal) {
   if (state.closed) return Promise.reject(new Fault("unavailable", "Client is closed"));
   const remaining = deadline - performance.now();
   if (remaining <= 0) return Promise.reject(new Fault("timeout", "Request deadline elapsed"));
+  if (signal?.aborted) return Promise.reject(new Fault("unavailable", "Request was cancelled"));
   const transport = state.url.protocol === "https:" ? https : http;
   const options = { protocol: state.url.protocol, hostname: state.url.hostname, port: state.url.port || undefined, method, path, maxHeaderSize: 8192, headers: { Accept: "application/json", ...(auth ? { Authorization: `Bearer ${state.token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }) }, agent: false };
   if (state.ca) options.ca = state.ca;
@@ -167,7 +168,7 @@ function request(state, method, path, body, deadline, auth = true) {
     let settled = false; let responseBytes = 0; let abort; const chunks = [];
     const finish = (error, value) => {
       if (settled) return; settled = true; clearTimeout(timer); state.requests.delete(req);
-      if (abort) state.signal?.removeEventListener("abort", abort);
+      if (abort) signal?.removeEventListener("abort", abort);
       error ? reject(error) : resolve(value);
     };
     const req = transport.request(options, (res) => {
@@ -188,9 +189,9 @@ function request(state, method, path, body, deadline, auth = true) {
     });
     state.requests.add(req);
     const timer = setTimeout(() => { req.destroy(new Error("deadline")); finish(new Fault("timeout", "Request deadline elapsed")); }, Math.max(1, Math.min(remaining, 3000)));
-    if (state.signal?.aborted) { req.destroy(); finish(new Fault("unavailable", "Request was cancelled")); return; }
+    if (signal?.aborted) { req.destroy(); finish(new Fault("unavailable", "Request was cancelled")); return; }
     abort = () => { req.destroy(); finish(new Fault("unavailable", "Request was cancelled")); };
-    state.signal?.addEventListener("abort", abort, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
     req.on("error", (error) => finish(error));
     if (body !== undefined) req.end(body); else req.end();
   });
@@ -267,7 +268,10 @@ async function openClient(options, { checkHealth, signal, deadline: operationDea
 export async function invokeClient(client, input) {
   const state = clients.get(client);
   if (!state || state.closed) fail("unavailable", "Client is closed");
-  if (!object(input) || Object.keys(input).sort().join(",") !== "args,deadline,op,rid" || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.rid) || !ops.has(input.op) || !object(input.args) || !Number.isFinite(input.deadline)) fail("input", "RPC call is invalid");
+  const fields = object(input) ? Object.keys(input).sort().join(",") : "";
+  if (!object(input) || !["args,deadline,op,rid", "args,deadline,op,rid,signal"].includes(fields) || input.signal !== undefined && !(input.signal instanceof AbortSignal) || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.rid) || !ops.has(input.op) || !object(input.args) || !Number.isFinite(input.deadline)) fail("input", "RPC call is invalid");
+  const signal = input.signal === undefined || !state.signal ? input.signal ?? state.signal : AbortSignal.any([state.signal, input.signal]);
+  if (signal?.aborted) fail("unavailable", "Request was cancelled");
   if (input.op === "send" || input.op === "post") {
     try { validateEnvelope(input.args.envelope, { board: input.op === "post" }); }
     catch (error) { if (error instanceof Fault) throw error; fail("data", "Envelope is not representable JSON"); }
@@ -282,7 +286,7 @@ export async function invokeClient(client, input) {
   for (let i = 0; i < attempts; i++) {
     let response;
     try {
-      response = await request(state, "POST", "/v1/call", payload, input.deadline);
+      response = await request(state, "POST", "/v1/call", payload, input.deadline, true, signal);
       const body = response.value;
       const keys = body?.ok === true ? ["v", "rid", "ok", "result", "time", "replayed", "remainingMs"] : ["v", "rid", "ok", "fault", "time"];
       if (!object(body) || body.v !== 1 || body.rid !== input.rid || typeof body.ok !== "boolean" || !Number.isSafeInteger(body.time) || Object.keys(body).sort().join(",") !== [...keys].sort().join(",")) fail("protocol", "Broker response does not match request", { id: input.rid });

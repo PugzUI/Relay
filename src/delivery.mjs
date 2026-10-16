@@ -1,12 +1,15 @@
 import { access } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Fault } from "./fault.mjs";
+import { formatDeliveryNotice } from "./delivery-notice.mjs";
+import { createRecipientHandle } from "./recipient.mjs";
 import {
   bindDeliverySession,
   deliveryStatus,
   deliveryTargetDigest,
   endDeliveryBinding,
   listDeliveryAttempts,
+  listDeliveryBindings,
   releaseDeliveryOwner,
   relayRoot,
   reserveDeliveryAttempt,
@@ -34,6 +37,9 @@ const TERMINAL = new Set(["safe_idle", "refused", "reconciled"]);
 const UNRESOLVED = new Set(["reserved", "submitting", "admitted", "context_observed", "turn_started", "held", "uncertain"]);
 const OBSERVATIONS = new Set(["context_observed", "turn_started", "safe_idle", "held", "refused"]);
 const REASONS = new Set(["auth-revoked", "binding-stale", "capacity-full", "cancelled", "deadline-elapsed", "native-held", "native-refused", "native-timeout", "native-unavailable", "native-unsupported", "observed", "operator-confirmed", "owner-recovery", "retry-exhausted", "submission-uncertain", "target-owned"]);
+const HUB_PENDING_PER_MINUTE = 20;
+const HUB_PENDING_MIN_INTERVAL_MS = 3000;
+const HUB_CACHE_MAX = LIMITS.deliveryBindingsMax;
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const fail = (code, message) => { throw new Fault(code, message); };
 const exact = (value, keys) => {
@@ -94,18 +100,6 @@ function validateSummary(summary, binding) {
     if (!exact(counts, ["msg", "work"]) || Object.values(counts).some((count) => !Number.isSafeInteger(count) || count < 0)) fail("protocol", "Recipient summary counts are invalid");
   }
   return summary;
-}
-
-function noticeText(scopes) {
-  const prefix = "Relay pending state changed. Read current state before acting.\n";
-  const lines = [];
-  for (const scope of scopes) {
-    const summary = scope.summary;
-    const line = `scope ${lines.length + 1}: msg=${summary.pending.msg} work=${summary.pending.work} recoverable_msg=${summary.recoverable.msg} recoverable_work=${summary.recoverable.work} revision=${summary.revision}\n`;
-    if (Buffer.byteLength(prefix + lines.join("") + line, "utf8") > LIMITS.deliveryNoticeBytes) break;
-    lines.push(line);
-  }
-  return lines.length ? prefix + lines.join("") : null;
 }
 
 function withDeadline(fn, controller, ms) {
@@ -169,13 +163,20 @@ export function createDeliverySupervisor(options) {
     activeCalls: 0,
     waiters: [],
     capacityRequests: new Map(),
+    hubReadTimes: [],
+    hubNextReadAt: 0,
+    hubBackoffUntil: 0,
+    hubFailureCount: 0,
+    hubCursor: null,
+    hubSummaryCache: new Map(),
+    recipientReplyKeys: new Map(),
+    targetCursor: null,
+    passPromise: null,
+    passRequested: false,
     timer: null,
-    scheduledTimer: null,
     started: false,
     starting: false,
-    runScheduled: false,
     closed: false,
-    running: false,
     tickFailures: 0,
     lastErrorCode: null,
     abort: new AbortController(),
@@ -183,6 +184,18 @@ export function createDeliverySupervisor(options) {
 
   function current(binding) {
     return !state.closed && state.bindings.get(binding.id) === binding && binding.active;
+  }
+
+  function recipientCurrent(binding) {
+    if (!current(binding)) return false;
+    try {
+      const stored = listDeliveryBindings(state.local, state.ownerGeneration).find((row) => row.id === binding.id);
+      return stored?.state === "active" && stored.generation === binding.generation &&
+        stored.ownerGeneration === state.ownerGeneration && stored.authority === binding.authority &&
+        stored.worker === binding.worker && stored.sid === binding.sid && stored.epoch === binding.epoch;
+    } catch {
+      return false;
+    }
   }
 
   function refsFor(targetDigest) {
@@ -225,17 +238,79 @@ export function createDeliverySupervisor(options) {
     }
   }
 
-  async function summaryFor(binding) {
+  function hubApi(binding) {
+    return binding.authority !== state.local.authority;
+  }
+
+  function hubReadAvailable() {
+    const now = performance.now();
+    state.hubReadTimes = state.hubReadTimes.filter((time) => now - time < 60_000);
+    return now >= state.hubNextReadAt && now >= state.hubBackoffUntil && state.hubReadTimes.length < HUB_PENDING_PER_MINUTE;
+  }
+
+  function cachedSummary(binding) {
+    const cached = state.hubSummaryCache.get(binding.id);
+    return cached ? { binding, summary: cached.summary, error: null, fresh: false } : { binding, summary: null, error: null, fresh: false };
+  }
+
+  function rememberHubSummary(binding, summary) {
+    state.hubSummaryCache.delete(binding.id);
+    state.hubSummaryCache.set(binding.id, { summary, receivedAt: performance.now() });
+    while (state.hubSummaryCache.size > HUB_CACHE_MAX) state.hubSummaryCache.delete(state.hubSummaryCache.keys().next().value);
+  }
+
+  function noteHubFailure(error) {
+    const code = error instanceof Fault ? error.code : "unavailable";
+    if (!["rate", "unavailable", "timeout", "tls"].includes(code)) return;
+    state.hubFailureCount = Math.min(state.hubFailureCount + 1, 8);
+    const floor = code === "rate" ? 10_000 : 1000;
+    const delay = Math.min(30_000, Math.max(floor, 500 * (2 ** (state.hubFailureCount - 1))));
+    state.hubBackoffUntil = performance.now() + delay;
+  }
+
+  function nextHubBinding() {
+    const bindings = [...state.bindings.values()].filter((binding) => current(binding) && hubApi(binding));
+    if (!bindings.length) return null;
+    const prior = bindings.findIndex((binding) => binding.id === state.hubCursor);
+    return bindings[(prior + 1 + bindings.length) % bindings.length];
+  }
+
+  async function fetchSummary(binding, { scheduled = true } = {}) {
     const api = binding.authority === state.local.authority ? state.local
       : state.hub?.authority === binding.authority ? state.hub : null;
     if (!api) throw new Fault("auth", "Delivery authority is not configured");
-    return withSlot(async () => validateSummary(await api.pending(binding.sid), binding));
+    if (api !== state.local && scheduled) {
+      if (!hubReadAvailable()) throw new Fault("rate", "Shared hub summary read budget is exhausted");
+      const now = performance.now();
+      state.hubReadTimes.push(now);
+      state.hubNextReadAt = now + HUB_PENDING_MIN_INTERVAL_MS;
+    }
+    try {
+      const summary = await withSlot(async () => validateSummary(await api.pending(binding.sid), binding));
+      if (api !== state.local) {
+        state.hubFailureCount = 0;
+        state.hubBackoffUntil = 0;
+        if (scheduled) rememberHubSummary(binding, summary);
+      }
+      return summary;
+    } catch (error) {
+      if (api !== state.local) noteHubFailure(error);
+      throw error;
+    }
   }
 
-  async function summariesFor(target) {
+  async function summaryFor(binding, { scheduledHubId = null, explicit = false } = {}) {
+    if (!hubApi(binding)) return { binding, summary: await fetchSummary(binding), error: null, fresh: true };
+    if (!explicit && binding.id !== scheduledHubId) return cachedSummary(binding);
+    if (!hubReadAvailable()) return cachedSummary(binding);
+    try { return { binding, summary: await fetchSummary(binding), error: null, fresh: true }; }
+    catch (error) { return { binding, summary: null, error, fresh: false }; }
+  }
+
+  async function summariesFor(target, options = {}) {
     const bindings = [...target.bindingIds].map((id) => state.bindings.get(id)).filter((binding) => binding && current(binding));
     const values = await mapLimit(bindings, LIMITS.deliveryNativeCalls, async (binding) => {
-      try { return { binding, summary: await summaryFor(binding), error: null }; }
+      try { return await summaryFor(binding, options); }
       catch (error) { return { binding, summary: null, error }; }
     });
     const available = [];
@@ -258,7 +333,9 @@ export function createDeliverySupervisor(options) {
   function priorRevisions(attempts) {
     const revisions = new Map();
     for (const attempt of attempts) {
-      if (attempt.submittingAt === null) continue;
+      const accepted = ["admitted", "context_observed", "turn_started", "safe_idle"].includes(attempt.state) ||
+        attempt.state === "reconciled" && attempt.reconcileOutcome === "observed";
+      if (!accepted) continue;
       for (const scope of attempt.scopes) {
         const seen = revisions.get(scope.binding) ?? new Set();
         seen.add(scope.revision);
@@ -270,7 +347,33 @@ export function createDeliverySupervisor(options) {
 
   function changedScopes(values, attempts) {
     const revisions = priorRevisions(attempts);
-    return values.filter(({ binding, summary }) => hasPending(summary) && !revisions.get(binding.id)?.has(summary.revision));
+    const refusals = new Map();
+    for (const attempt of attempts) {
+      const notAccepted = attempt.state === "refused" || attempt.state === "reconciled" && attempt.reconcileOutcome === "not-accepted";
+      if (!notAccepted) continue;
+      for (const scope of attempt.scopes) {
+        const key = `${scope.binding}:${scope.revision}`;
+        const row = refusals.get(key) ?? { count: 0, changed: 0, latestId: null };
+        row.count++;
+        if (attempt.changed >= row.changed) {
+          row.changed = attempt.changed;
+          row.latestId = attempt.id;
+        }
+        refusals.set(key, row);
+      }
+    }
+    const now = Date.now();
+    return values.filter(({ binding, summary, fresh }) => {
+      if (!fresh || !hasPending(summary) || revisions.get(binding.id)?.has(summary.revision)) return false;
+      const prior = refusals.get(`${binding.id}:${summary.revision}`);
+      if (!prior) return true;
+      if (prior.count > LIMITS.deliveryRetries) return false;
+      const base = Math.min(LIMITS.deliveryRetryMaxMs, LIMITS.deliveryRetryMinMs * (2 ** (prior.count - 1)));
+      const spread = Math.max(1, Math.min(base, LIMITS.deliveryRetryMaxMs - base + 1));
+      const seed = Number.parseInt(prior.latestId?.slice(-8) ?? "0", 16) || 0;
+      const delay = base + seed % spread;
+      return now >= prior.changed + delay;
+    });
   }
 
   function transition(attempt, from, to, refs, extra = {}) {
@@ -325,7 +428,10 @@ export function createDeliverySupervisor(options) {
     if (currentState === "held" && observation.state !== "held") move("uncertain", { reasonCode: "observed" });
     if (observation.state === "held" || observation.state === "refused") {
       const reasonCode = observation.state === "held" ? "native-held" : "native-refused";
-      if (currentState === "context_observed" || currentState === "turn_started") {
+      if (observation.state === "refused" && (attempt.admittedAt !== null || ["admitted", "context_observed", "turn_started"].includes(currentState))) {
+        if (currentState !== "uncertain") move("uncertain", { reasonCode });
+        else return false;
+      } else if (currentState === "context_observed" || currentState === "turn_started") {
         move("uncertain", { reasonCode });
       } else if (UNRESOLVED.has(currentState)) move(observation.state, { reasonCode });
       else return false;
@@ -349,15 +455,10 @@ export function createDeliverySupervisor(options) {
   function createTicket(binding, values, attempts) {
     const scopes = changedScopes(values, attempts);
     if (!scopes.length) return null;
-    const formattedScopes = [];
-    for (const value of scopes) {
-      const candidate = [...formattedScopes, { binding: value.binding, summary: value.summary }];
-      if (!noticeText(candidate)) break;
-      formattedScopes.push(candidate.at(-1));
-    }
-    const notice = noticeText(formattedScopes);
-    if (!notice) return null;
-    const bindings = formattedScopes;
+    const formatted = formatDeliveryNotice(scopes);
+    if (!formatted.text) return null;
+    const notice = formatted.text;
+    const bindings = formatted.scopes;
     const attemptId = `delivery-${randomUUID()}`;
     const saved = reserveDeliveryAttempt(state.local, {
       id: attemptId,
@@ -406,8 +507,8 @@ export function createDeliverySupervisor(options) {
 
   async function readNotice(binding) {
     const target = activeTarget(binding);
-    const values = await summariesFor(target);
-    if (!values.length) return null;
+    const values = await summariesFor(target, { explicit: true });
+    if (!values.some((value) => value.fresh)) return null;
     const attempts = listDeliveryAttempts(state.local, state.ownerGeneration);
     if (attempts.some((attempt) => attempt.targetDigest === binding.targetDigest && UNRESOLVED.has(attempt.state))) return null;
     return createTicket(binding, values, attempts);
@@ -438,7 +539,7 @@ export function createDeliverySupervisor(options) {
     if (!exact(currentStatus, ["state"]) || currentStatus.state !== "absent") return null;
     const values = await summariesFor(target);
     const local = values.find((value) => value.binding.authority === state.local.authority && value.binding.sid === binding.sid);
-    if (!local) return null;
+    if (!local?.fresh) return null;
     const demand = Math.min(512, local.summary.pending.work + local.summary.recoverable.work);
     if (demand < 1) return null;
     if (state.capacityRequests.has(binding.sid)) return state.capacityRequests.get(binding.sid);
@@ -475,7 +576,7 @@ export function createDeliverySupervisor(options) {
   }
 
   async function dispatch(binding, target, values, attempts) {
-    if (state.activeCalls >= LIMITS.deliveryNativeCalls || !binding.capabilities.idle || !target.consumer.status || !target.consumer.submit) return;
+    if (state.activeCalls >= LIMITS.deliveryNativeCalls || !binding.capabilities.idle || !target.consumer.status || !target.consumer.submit || !changedScopes(values, attempts).length) return;
     let ticket;
     try {
       const currentStatus = await invokeNative(binding, target.consumer.status, {});
@@ -506,17 +607,26 @@ export function createDeliverySupervisor(options) {
     }
   }
 
-  async function runPass() {
-    if (state.closed) return;
-    if (state.running) {
-      while (state.running && !state.closed) await new Promise((resolve) => setTimeout(resolve, 1));
-      return;
-    }
-    state.running = true;
+  function schedulePass(delay) {
+    if (!state.started || state.closed) return;
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      void runPass();
+    }, delay);
+  }
+
+  async function executePass() {
     state.lastErrorCode = null;
     try {
       const attempts = listDeliveryAttempts(state.local, state.ownerGeneration);
-      const targets = [...state.targets.values()];
+      const allTargets = [...state.targets.values()];
+      const prior = allTargets.findIndex((target) => target.digest === state.targetCursor);
+      const start = allTargets.length ? (prior + 1 + allTargets.length) % allTargets.length : 0;
+      const targets = [...allTargets.slice(start), ...allTargets.slice(0, start)];
+      if (targets.length) state.targetCursor = targets[0].digest;
+      const selectedHub = hubReadAvailable() ? nextHubBinding() : null;
+      if (selectedHub) state.hubCursor = selectedHub.id;
       await mapLimit(targets, LIMITS.deliveryNativeCalls, async (target) => {
         if (state.closed) return;
         const targetAttempts = attempts.filter((attempt) => attempt.targetDigest === target.digest && UNRESOLVED.has(attempt.state));
@@ -524,9 +634,10 @@ export function createDeliverySupervisor(options) {
           for (const attempt of targetAttempts) await reconcileAttempt(target, attempt);
           return;
         }
-        const values = await summariesFor(target);
-        if (!values.length) return;
-        await dispatch(values[0].binding, target, values, attempts);
+        const values = await summariesFor(target, { scheduledHubId: selectedHub?.id ?? null });
+        if (!values.some((value) => value.fresh)) return;
+        const eligible = changedScopes(values, attempts);
+        if (eligible.length) await dispatch(eligible[0].binding, target, values, attempts);
       });
     } catch (error) {
       state.tickFailures++;
@@ -534,22 +645,44 @@ export function createDeliverySupervisor(options) {
       if (error instanceof Fault && error.code === "owner") {
         state.closed = true;
         clearTimeout(state.timer);
+        state.timer = null;
         state.abort.abort();
       }
-    } finally {
-      state.running = false;
-      if (state.started && !state.closed) state.timer = setTimeout(() => { void runPass(); }, state.pollMs);
     }
   }
 
+  function runPass() {
+    if (state.closed) return Promise.resolve();
+    clearTimeout(state.timer);
+    state.timer = null;
+    if (state.passPromise) {
+      state.passRequested = true;
+      return state.passPromise;
+    }
+    const pass = executePass();
+    state.passPromise = pass;
+    pass.then(() => {
+      if (state.passPromise === pass) state.passPromise = null;
+      if (state.closed || !state.started) return;
+      if (state.passRequested) {
+        state.passRequested = false;
+        schedulePass(0);
+      } else schedulePass(state.pollMs);
+    }, () => {
+      if (state.passPromise === pass) state.passPromise = null;
+      if (state.closed || !state.started) return;
+      if (state.passRequested) {
+        state.passRequested = false;
+        schedulePass(0);
+      } else schedulePass(state.pollMs);
+    });
+    return pass;
+  }
+
   function requestPass() {
-    if (state.closed || state.starting || state.running || state.runScheduled) return;
-    state.runScheduled = true;
-    state.scheduledTimer = setTimeout(() => {
-      state.scheduledTimer = null;
-      state.runScheduled = false;
-      void runPass();
-    }, 0);
+    if (state.closed || !state.started || state.starting) return;
+    if (state.passPromise) { state.passRequested = true; return; }
+    schedulePass(0);
   }
 
   async function bind(input) {
@@ -563,8 +696,11 @@ export function createDeliverySupervisor(options) {
     if (existingTarget && existingTarget.consumer !== consumer) fail("active", "Native target already has a different consumer binding");
     const api = input.authority === state.local.authority ? state.local : state.hub?.authority === input.authority ? state.hub : null;
     if (!api) fail("auth", "Native binding authority is not configured");
-    const summary = validateSummary(await withSlot(() => api.pending(input.sid)), input);
-    if (summary.worker !== input.worker || summary.epoch !== input.epoch) fail("session", "Native binding is not the exact live recipient");
+    const requestedBinding = { authority: input.authority, worker: input.worker, sid: input.sid, epoch: input.epoch };
+    if (api === state.local) {
+      const summary = await fetchSummary(requestedBinding);
+      if (summary.worker !== input.worker || summary.epoch !== input.epoch) fail("session", "Native binding is not the exact live recipient");
+    }
     const binding = bindDeliverySession(state.local, {
       authority: input.authority,
       worker: input.worker,
@@ -576,6 +712,16 @@ export function createDeliverySupervisor(options) {
     });
     const record = { ...binding, client: input.client, consumer, active: true };
     state.bindings.set(record.id, record);
+    const recipientHandle = createRecipientHandle({
+      binding: record,
+      api,
+      isCurrent: recipientCurrent,
+      // The background hint budget must not reject an agent responding to its hint.
+      // Foreground reads still use fresh authority state and the broker's own limits.
+      readPending: async () => validateSummary(await fetchSummary(record, { scheduled: false }), record),
+      replyKeys: state.recipientReplyKeys,
+    });
+    record.recipientHandle = recipientHandle;
     const targetRecord = existingTarget ?? { digest: targetDigest, target, consumer, bindingIds: new Set() };
     targetRecord.target = target;
     targetRecord.bindingIds.add(record.id);
@@ -583,6 +729,7 @@ export function createDeliverySupervisor(options) {
     const handle = Object.freeze({
       notice: () => readNotice(record),
       safeBoundary: requestPass,
+      recipient: (op, args) => recipientHandle.recipient(op, args),
       observe: (attemptId, observation) => recordObservation(record, attemptId, observation),
       requestCapacity: () => requestCapacity(record, targetRecord),
       close: () => unbind(record),
@@ -593,6 +740,7 @@ export function createDeliverySupervisor(options) {
 
   async function unbind(binding) {
     if (!current(binding)) return;
+    binding.recipientHandle?.close();
     const target = state.targets.get(binding.targetDigest);
     const attempts = listDeliveryAttempts(state.local, state.ownerGeneration).filter((attempt) => attempt.targetDigest === binding.targetDigest && UNRESOLVED.has(attempt.state));
     for (const attempt of attempts) {
@@ -601,6 +749,7 @@ export function createDeliverySupervisor(options) {
     }
     binding.active = false;
     state.bindings.delete(binding.id);
+    state.hubSummaryCache.delete(binding.id);
     target?.bindingIds.delete(binding.id);
     if (target && target.bindingIds.size === 0) state.targets.delete(target.digest);
     endDeliveryBinding(state.local, { binding: binding.id, generation: binding.generation, ownerGeneration: state.ownerGeneration });
@@ -640,16 +789,15 @@ export function createDeliverySupervisor(options) {
     state.started = false;
     state.starting = false;
     clearTimeout(state.timer);
-    clearTimeout(state.scheduledTimer);
-    state.scheduledTimer = null;
-    state.runScheduled = false;
+    state.timer = null;
+    state.passRequested = false;
     state.abort.abort();
     for (const controller of state.controllers) controller.abort();
     for (const waiter of state.waiters.splice(0)) {
       clearTimeout(waiter.timer);
       waiter.reject(new Fault("unavailable", "Delivery supervisor is closing"));
     }
-    while (state.running) await new Promise((resolve) => setTimeout(resolve, 1));
+    await state.passPromise;
     while (state.activeCalls) await new Promise((resolve) => setTimeout(resolve, 1));
     const failures = [];
     for (const handle of [...state.adapterHandles].reverse()) {
@@ -666,7 +814,9 @@ export function createDeliverySupervisor(options) {
       } catch (error) { failures.push(error); }
     }
     for (const binding of [...state.bindings.values()]) {
+      binding.recipientHandle?.close();
       binding.active = false;
+      state.hubSummaryCache.delete(binding.id);
       try { endDeliveryBinding(state.local, { binding: binding.id, generation: binding.generation, ownerGeneration: state.ownerGeneration }); }
       catch (error) { failures.push(error); }
     }

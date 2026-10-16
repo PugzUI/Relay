@@ -52,8 +52,20 @@ relay stats --root PATH
 relay audit --root PATH [--after CURSOR]
 relay snapshot --root PATH [--device ID] [--limit N] [--after CURSOR]
 relay purge --root PATH --before EPOCH_MS [--dry]
-relay serve --root PATH --config FILE
+relay serve [--root PATH --config FILE] [--no-copy-token]
 ```
+
+Bare `relay serve` (or `npm start` from source) initializes/reuses the private
+local host profile at `.local/store` and `.local/relay.json`. It listens on
+loopback port 4200, creates a private read-only viewer token file, and enables
+neither a hub connection, agent pool nor native delivery. It never seeds worker
+or message data. Custom root/config selectors must be supplied together and
+never trigger initialization. The SDK `serve()` remains explicit and unchanged.
+
+Human-readable default local startup attempts a Wayland clipboard copy after
+the listener is ready, using optional `wl-copy` with the token only on stdin.
+Missing, refused or stalled clipboard commands do not stop the broker.
+`--no-copy-token`, `--json` and custom profiles skip clipboard access.
 
 For remote operation routes, use `--url HTTPS_ORIGIN --token-file FILE`, with
 optional `--ca-file FILE` for a private LAN trust root. HTTP is accepted only
@@ -70,5 +82,15 @@ use stdout; safe diagnostics use stderr. Exit status is `0` for success,
 including an empty claim, `2` for invalid input, `3` for a contract refusal,
 and `1` for storage/runtime failure.
 
-The CLI code and argument tests are present in this lane. Full command replay
-remains pending integration of the core and network modules.
+CLI dispatch, core operations and authenticated network requests have automated
+integration coverage. These checks do not qualify native agent delivery;
+current results and remaining boundaries are recorded in [verification](verification.md).
+
+
+## Native recipient tools
+
+The opt-in OpenCode consumer exposes a private, binding-pinned tool surface;
+it does not add public SDK exports or public broker RPC operations. Session
+renewal and lease extension are runtime-owned. See
+[idle recipient consumption](idle-consumer.md) for configuration, tool shapes
+and recovery limits.

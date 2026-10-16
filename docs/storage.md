@@ -26,7 +26,11 @@ database, WAL, expiry change, or cleanup record.
 
 One message table stores addressed messages and board entries. It holds one
 canonical `{msg}` or `{work}` envelope, its derived kind, and the same persistent
-sequence/receipt/lease relationships. Inbox `posted` rows are append-only and
+sequence/receipt/lease relationships. `meta.messageSeq` preserves a monotonic
+message high-water counter through deletion. Existing stores seed this
+additive metadata from retained rows during enqueue or real purge; reads
+never initialize it. New messages cannot enter an old cursor by reusing a
+purged sequence. Inbox `posted` rows are append-only and
 have no lease. Work claims get a fresh attempt ID. Expiry can make work
 available again; external execution can repeat after interruption.
 
@@ -40,3 +44,9 @@ records.
 The package targets Node.js `>=24.0.0` and a local filesystem. Windows, macOS,
 network filesystems, and shared SQLite mounts are not claimed until their
 storage and concurrency cases are qualified.
+
+Pool-managed addressed work and board work share the existing capacity ledger. A null
+board in the internal reservation API is stored as the private `@addressed`
+marker, never a real board or a wire selector. Drain those reservations before
+using older binaries that do not support this encoding. No schema reset or
+second work queue is introduced.

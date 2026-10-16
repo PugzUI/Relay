@@ -1,6 +1,39 @@
 # Verification
 
-## Native execution
+## 2026-10-17: reviewed integration
+
+The reviewed product tree passed **245/245 tests**, with no failures,
+cancellations or skips, on Linux with Node.js **26.11.1** and npm **12.2.1**.
+The same 245 tests and `npm run check` passed in a fresh export of the staged
+files, without the unrelated local prototypes or tooling configurations.
+Package checks covered 32 JavaScript modules, nine public exports, strict
+consumer declarations and the 36-file package manifest. An actual npm archive
+installed offline and passed package/plugin imports plus a durable work
+claim-and-acknowledgement roundtrip.
+
+This review added 15 regressions. Corrections separate explicit recipient reads
+from background hub polling limits; cancel and bound recipient calls and
+cleanup; reject malformed bridge UTF-8; prevent private token/registry reads
+from blocking on named pipes; bound token/registry reads; impose a total bridge
+request deadline; and preserve useful configuration validation errors. Earlier
+SSE handshake and stable UI-row fixes remain included. The implementation
+contract was reconciled with the current replay, Pool and asynchronous API
+behavior.
+
+The real-clock integration also passed **125 seconds of idle maintenance** and
+**35 seconds of active-work lease maintenance**, then explicitly settled the
+work. It uses actual SQLite, supervisor, private socket and plugin code with a
+**fake native SDK**, without provider calls. This is not fresh native OpenCode
+qualification, Node 24 certification or cross-host network qualification.
+Native restart recovery and the other clients remain subject to the existing
+qualification boundaries.
+
+The [review receipt](media/review-2026-10-17.json) records source hashes, test
+results and archive verification. Older receipts below are historical snapshots,
+not claims about the current tree; their original source hashes and failed
+native observations are preserved.
+
+## Historical native execution
 
 The regression suite passed with **105 tests, no failures or skips** on Linux
 with Node.js **24.21.0** and **26.11.1**. Earlier local runs also exercised
@@ -193,3 +226,34 @@ These checks do not qualify the remaining native matrix.
 Relay does not configure firewall, Tailscale, public ingress, certificates,
 proxies or host services automatically. Local and loopback evidence must not
 be described as production LAN/Tailscale certification.
+
+
+## 2026-10-16: audited correctness and opt-in recipient consumer
+
+On Linux with Node.js v26.11.1 and npm 12.2.0, the integrated working tree passed
+`npm test`: **227/227 tests**, no failures, cancellations or skips.
+`npm run check` passed syntax, the nine public exports, strict declarations,
+UI bundle/license consistency and the 36-file package allowlist.
+`git diff --check` also passed.
+
+The added integration test uses real SQLite, supervisor, authenticated Unix
+bridge and plugin code with a **fake native SDK**. It verifies addressed message
+claim, a sender-scoped reply, explicit acknowledgement, a large JSON work item,
+and the absence of acknowledgement merely from native turn completion.
+The opt-in real-clock run passed 125 seconds of idle session maintenance and
+35 seconds of active-work lease maintenance, then settled the work successfully.
+It made no provider calls. That lifetime run preceded a final bounded
+request-framing adjustment; the complete suite passed again afterward.
+
+Regression coverage includes empty/full-journal replay, monotonic message
+sequences after purge, board authorization during SQL pagination, exact notice
+scope truncation, single-timer scheduling, confirmed nonacceptance, shared-hub
+read budgets, addressed-work capacity/recovery/fairness, cancellation and native
+bridge reconnection. The existing theme and unrelated local-profile changes
+were preserved. No installed native profile or host service was deployed.
+
+These results do **not** qualify a real OpenCode runtime, provider behavior,
+other native clients, cross-host reachability or complete native restart
+reconciliation. Existing native spike receipts and their limitations remain
+unchanged. See [idle recipient consumption](idle-consumer.md) and the
+[machine-readable implementation receipt](media/implementation-2026-10-16.json).

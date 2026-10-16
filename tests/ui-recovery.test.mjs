@@ -55,6 +55,56 @@ async function withSnapshotBroker(run) {
   });
 }
 
+test("quiet event streams send their HTTP handshake before the first event", async () => {
+  await withSnapshotBroker(async ({ origin, token }) => {
+    const headers = { Authorization: `Bearer ${token}` };
+    const snapshot = await (await fetch(`${origin}/v1/topology?limit=512`, { headers })).json();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    let response;
+    try {
+      response = await fetch(`${origin}/v1/events?cursor=${encodeURIComponent(snapshot.cursor)}`, { headers, signal: controller.signal });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+    } finally {
+      clearTimeout(timer);
+      await response?.body?.cancel();
+      controller.abort();
+    }
+  });
+});
+
+test("event stream cursor refusals keep their JSON fault response", async () => {
+  await withSnapshotBroker(async ({ origin, token }) => {
+    const headers = { Authorization: `Bearer ${token}` };
+    const snapshot = await (await fetch(`${origin}/v1/topology?limit=512`, { headers })).json();
+    const cursor = JSON.parse(Buffer.from(snapshot.cursor, "base64url").toString());
+    cursor.seq = Number.MAX_SAFE_INTEGER;
+    const invalid = Buffer.from(JSON.stringify(cursor)).toString("base64url");
+    const response = await fetch(`${origin}/v1/events?cursor=${invalid}`, { headers, signal: AbortSignal.timeout(3000) });
+    assert.equal(response.status, 503);
+    assert.match(response.headers.get("content-type"), /^application\/json/);
+    assert.equal((await response.json()).fault.code, "cursor");
+  });
+});
+
+test("unchanged pane refreshes retain their record and payload nodes", async () => {
+  const ui = await uiRuntime(() => { throw new Error("Rendering must not request data"); });
+  try {
+    ui.run(`state.selectedBoard='bounty';state.connection='connected';state.inbox.page={items:[{id:'m1',state:'posted',seq:1,init:1,data:{msg:'Keep selection'}}],visible:1,total:1,complete:true,pruned:0};renderPane('inbox')`);
+    const row = ui.element("inbox-rows").firstChild;
+    const payload = row.children[2];
+    ui.run("state.inbox.loading=true;renderPane('inbox');state.inbox.loading=false;renderPane('inbox')");
+    assert.equal(ui.element("inbox-rows").firstChild, row);
+    assert.equal(row.children[2], payload);
+    ui.run("state.inbox.page.items[0].data.msg='Changed';renderPane('inbox')");
+    assert.equal(ui.element("inbox-rows").firstChild, row);
+    assert.equal(row.children[2].textContent, "Changed");
+    ui.run("state.inbox.page=null;renderPane('inbox')");
+    assert.equal(ui.element("inbox-rows").children.length, 0);
+  } finally { await ui.close(); }
+});
+
 test("superseded pane cancellation cannot clear a newer request's loading state", async () => {
   const ui = await uiRuntime((_path, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });

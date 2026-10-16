@@ -27,6 +27,21 @@ function readMeta(db, key) {
   catch { throw new Fault("schema", "Store metadata is invalid"); }
 }
 function writeMeta(db, key, value) { db.prepare("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, JSON.stringify(value)); }
+function messageSequenceHighWater(db) {
+  const saved = readMeta(db, "messageSeq");
+  const retained = Number(db.prepare("SELECT COALESCE(MAX(seq),0) AS n FROM messages").get().n);
+  if ((saved !== undefined && (!Number.isSafeInteger(saved) || saved < 0)) || !Number.isSafeInteger(retained) || retained < 0) throw new Fault("schema", "Message sequence metadata is invalid");
+  const highWater = Math.max(saved ?? 0, retained);
+  if (saved === undefined || highWater > saved) writeMeta(db, "messageSeq", highWater);
+  return highWater;
+}
+function nextMessageSequence(db) {
+  const highWater = messageSequenceHighWater(db);
+  if (highWater >= Number.MAX_SAFE_INTEGER) throw new Fault("full", "Message sequence space is full");
+  const next = highWater + 1;
+  writeMeta(db, "messageSeq", next);
+  return next;
+}
 function retentionKey(board, kind) { return `${board}|${kind}`; }
 function readMessagePruned(db) {
   const counts = readMeta(db, "messagePruned") ?? {};
@@ -76,7 +91,7 @@ function initStore(store, options = {}) {
     db.prepare("INSERT INTO boards(id,kind,device,init) VALUES(?,?,?,?)").run(hostBoard, "host", device.id, now);
     if (role === "hub") db.prepare("INSERT INTO boards(id,kind,device,init) VALUES('bounty','bounty',NULL,?)").run(now);
     writeMeta(db, "device", device); writeMeta(db, "role", role); writeMeta(db, "authority", id());
-    writeMeta(db, "policy", policy); writeMeta(db, "slotCounters", {}); writeMeta(db, "auditPruned", 0);
+    writeMeta(db, "policy", policy); writeMeta(db, "slotCounters", {}); writeMeta(db, "auditPruned", 0); writeMeta(db, "messageSeq", 0);
     return device;
   });
 }
@@ -317,7 +332,7 @@ export class Relay {
       if (totals.rows >= this._store.policy.retainedMessages || totals.bytes + normalized.bytes > this._store.policy.retainedBytes) throw new Fault("full", "Retained message capacity is full");
       const posted = kind === "post" && normalized.kind === "msg";
       if (!posted && (totals.pending >= this._store.policy.pendingMessages || totals.pendingBytes + normalized.bytes > this._store.policy.pendingBytes)) throw new Fault("full", "Outstanding message capacity is full");
-      const mid = id(); const seq = Number(db.prepare("SELECT COALESCE(MAX(seq),0)+1 AS n FROM messages").get().n);
+      const mid = id(); const seq = nextMessageSequence(db);
       db.prepare("INSERT INTO messages(id,seq,sender,recipient,board,kind,needs,series,data,state,init) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
         .run(mid, seq, sender, kind === "send" ? target : null, kind === "post" ? target : null, normalized.kind, JSON.stringify(needs), series ?? null, normalized.json, posted ? "posted" : "pending", now);
       if (key !== null) {
@@ -504,22 +519,36 @@ export class Relay {
       if (filter.kind) { clauses.push("kind=?"); params.push(filter.kind); }
       if (filter.state) { clauses.push("state=?"); params.push(filter.state); }
       const where = clauses.join(" AND ");
-      const visibleRows = db.prepare(`SELECT * FROM messages WHERE ${where} ORDER BY seq`).all(...params)
-        .filter((row) => !authorization || canReadMessage(authorization, row));
-      const total = visibleRows.length;
-      const rows = visibleRows.filter((row) => row.seq > last).slice(0, limit + 1);
-      const more = rows.length > limit; if (more) rows.pop();
-      const nextLast = rows.length ? rows.at(-1).seq : last;
+      const permission = messageReadSql(authorization);
+      const permittedWhere = `${where}${permission.sql}`;
+      const permittedParams = [...params, ...permission.params];
+      const total = Number(db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE ${permittedWhere}`).get(...permittedParams).n);
+      const selected = db.prepare(`SELECT seq,recipient,board,kind FROM messages WHERE ${permittedWhere} AND seq>? ORDER BY seq LIMIT ?`)
+        .all(...permittedParams, last, limit + 1);
+      const more = selected.length > limit;
+      if (more) selected.pop();
+      const nextLast = selected.length ? selected.at(-1).seq : last;
       const next = more ? encodeCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, last: nextLast }) : null;
-      const firstRows = (filter.board || filter.kind) ? db.prepare(`SELECT * FROM messages WHERE seq<=?${filter.to ? " AND recipient=?" : ""}${filter.board ? " AND board=?" : ""}${filter.kind ? " AND kind=?" : ""} ORDER BY seq`).all(...[boundary, filter.to, filter.board, filter.kind].filter((value) => value !== null)) : [];
-      const firstSeq = firstRows.find((row) => !authorization || canReadMessage(authorization, row))?.seq ?? null;
+      let firstSeq = null;
+      if (filter.board || filter.kind) {
+        const firstClauses = ["seq<=?"];
+        const firstParams = [boundary];
+        if (filter.to) { firstClauses.push("recipient=?"); firstParams.push(filter.to); }
+        if (filter.board) { firstClauses.push("board=?"); firstParams.push(filter.board); }
+        if (filter.kind) { firstClauses.push("kind=?"); firstParams.push(filter.kind); }
+        const firstWhere = `${firstClauses.join(" AND ")}${permission.sql}`;
+        firstSeq = db.prepare(`SELECT MIN(seq) AS n FROM messages WHERE ${firstWhere}`).get(...firstParams, ...permission.params).n ?? null;
+      }
       const prunedMeta = readMessagePruned(db);
       const pruned = filter.board ? [filter.kind ?? "msg", ...(filter.kind ? [] : ["work"])].reduce((sum, kind) => {
         const row = { board: filter.board, kind };
         return sum + (!authorization || canReadMessage(authorization, row) ? (prunedMeta[retentionKey(filter.board, kind)] ?? 0) : 0);
       }, 0) : 0;
-      if (options.data === true && authorization && rows.some((row) => !canReadBody(authorization, row))) throw new Fault("denied", "Message body is outside this principal scope");
-      const page = { items: rows.map((row) => this.#message(row, options.data === true)), total, visible: rows.length, complete: !more,
+      if (options.data === true && authorization && selected.some((row) => !canReadBody(authorization, row))) throw new Fault("denied", "Message body is outside this principal scope");
+      const rows = selected.length ? db.prepare(`SELECT id,seq,sender,recipient,board,kind,needs,series,state,init,acked,attempt${options.data === true ? ",data" : ""} FROM messages WHERE seq IN (${selected.map(() => "?").join(",")})`).all(...selected.map((row) => row.seq)) : [];
+      const rowsBySeq = new Map(rows.map((row) => [row.seq, row]));
+      if (rows.length !== selected.length) throw new Fault("schema", "Selected message page is incomplete");
+      const page = { items: selected.map((row) => this.#message(rowsBySeq.get(row.seq), options.data === true)), total, visible: rows.length, complete: !more,
         cursor: encodeCursor({ v: 1, authority: this.authority, scope, filter: filterHash, boundary, last: nextLast }), next, firstSeq, pruned };
       return page;
     });
@@ -687,6 +716,7 @@ export class Relay {
     options = assertOptions(options, ["before", "dry"], "purge");
     input(Number.isSafeInteger(options.before) && options.before >= 0, "Invalid purge cutoff"); input(options.dry === undefined || typeof options.dry === "boolean", "Invalid dry option");
     return tx(this, options.dry ? "read" : "write", ({ db, now }) => {
+      if (!options.dry) messageSequenceHighWater(db);
       const cutoff = Math.min(options.before, now - this._store.policy.terminalRetentionMs);
       const eligible = db.prepare("SELECT id,board,kind FROM messages m WHERE state IN ('posted','done','failed','rejected') AND COALESCE(acked,init)<=? AND NOT EXISTS(SELECT 1 FROM send_keys k WHERE k.mid=m.id AND k.until>?) AND NOT EXISTS(SELECT 1 FROM rpc r WHERE r.mid=m.id AND r.until>?) LIMIT 10000").all(cutoff, now, now);
       if (!options.dry) {
@@ -847,9 +877,27 @@ function deliveryRowCount(db) {
 
 function pruneDeliveryHistory(db, now) {
   const cutoff = now - LIMITS.terminalRetentionMs;
-  const attempts = db.prepare("SELECT id FROM delivery_attempts WHERE state IN ('safe_idle','refused','reconciled') AND changed<=? ORDER BY changed LIMIT 1000").all(cutoff);
-  for (const row of attempts) db.prepare("DELETE FROM delivery_attempt_scopes WHERE attempt=?").run(row.id);
-  for (const row of attempts) db.prepare("DELETE FROM delivery_attempts WHERE id=? AND state IN ('safe_idle','refused','reconciled')").run(row.id);
+  db.prepare(`DELETE FROM delivery_attempt_scopes WHERE attempt IN (
+    SELECT a.id FROM delivery_attempts a
+    WHERE a.state IN ('safe_idle','refused','reconciled') AND a.changed<=?
+      AND EXISTS (SELECT 1 FROM delivery_attempt_scopes s WHERE s.attempt=a.id AND (a.submitting_at IS NULL
+        OR NOT EXISTS (SELECT 1 FROM delivery_bindings b WHERE b.id=s.binding AND b.state='active' AND b.generation=s.binding_generation)
+        OR EXISTS (SELECT 1 FROM delivery_attempt_scopes newer JOIN delivery_attempts later ON later.id=newer.attempt
+          WHERE newer.binding=s.binding AND newer.binding_generation=s.binding_generation AND later.submitting_at IS NOT NULL
+            AND (later.init>a.init OR (later.init=a.init AND later.id>a.id)))))
+    ORDER BY a.changed LIMIT 1000
+  ) AND (
+      NOT EXISTS (SELECT 1 FROM delivery_bindings b WHERE b.id=delivery_attempt_scopes.binding AND b.state='active' AND b.generation=delivery_attempt_scopes.binding_generation)
+      OR EXISTS (SELECT 1 FROM delivery_attempts current WHERE current.id=delivery_attempt_scopes.attempt AND current.submitting_at IS NULL)
+      OR EXISTS (SELECT 1 FROM delivery_attempts a JOIN delivery_attempt_scopes newer ON newer.binding=delivery_attempt_scopes.binding AND newer.binding_generation=delivery_attempt_scopes.binding_generation
+        JOIN delivery_attempts later ON later.id=newer.attempt WHERE a.id=delivery_attempt_scopes.attempt AND later.submitting_at IS NOT NULL
+          AND (later.init>a.init OR (later.init=a.init AND later.id>a.id))))`).run(cutoff);
+  db.prepare(`DELETE FROM delivery_attempts WHERE id IN (
+    SELECT a.id FROM delivery_attempts a WHERE a.state IN ('safe_idle','refused','reconciled') AND a.changed<=?
+      AND NOT EXISTS (SELECT 1 FROM delivery_attempt_scopes s WHERE s.attempt=a.id)
+    ORDER BY a.changed LIMIT 1000
+  ) AND state IN ('safe_idle','refused','reconciled')
+    AND NOT EXISTS (SELECT 1 FROM delivery_attempt_scopes s WHERE s.attempt=delivery_attempts.id)`).run(cutoff);
   const bindings = db.prepare("SELECT b.id FROM delivery_bindings b WHERE b.state IN ('stale','ended') AND b.changed<=? AND NOT EXISTS(SELECT 1 FROM delivery_attempt_scopes s WHERE s.binding=b.id) ORDER BY b.changed LIMIT 1000").all(cutoff);
   for (const row of bindings) db.prepare("DELETE FROM delivery_bindings WHERE id=? AND state IN ('stale','ended')").run(row.id);
   const targets = db.prepare("SELECT t.digest FROM delivery_targets t WHERE t.state='free' AND t.lock_nonce IS NULL AND t.changed<=? AND NOT EXISTS(SELECT 1 FROM delivery_bindings b WHERE b.target=t.digest) AND NOT EXISTS(SELECT 1 FROM delivery_attempts a WHERE a.target=t.digest) ORDER BY t.changed LIMIT 1000").all(cutoff);
@@ -998,6 +1046,7 @@ export function reserveDeliveryAttempt(relay, value) {
   const nonce = randomBytes(24).toString("base64url");
   const digest = tx(relay, "write", ({ db, now }) => {
     const ownerGeneration = assertDeliveryOwner(db, store, value.ownerGeneration);
+    pruneDeliveryHistory(db, now);
     if (db.prepare("SELECT 1 FROM delivery_attempts WHERE id=?").get(value.id)) throw new Fault("rpc_conflict", "Delivery attempt ID already exists");
     const bindings = value.bindings.map((scope) => {
       const row = db.prepare("SELECT * FROM delivery_bindings WHERE id=? AND generation=? AND owner_generation=? AND state='active'").get(scope.binding, scope.generation, ownerGeneration);
@@ -1114,7 +1163,22 @@ export function listDeliveryAttempts(relay, ownerGeneration) {
   input(Number.isSafeInteger(ownerGeneration) && ownerGeneration > 0, "Invalid delivery owner generation");
   return tx(relay, "read", ({ db }) => {
     assertDeliveryOwner(db, store, ownerGeneration);
-    return db.prepare("SELECT * FROM delivery_attempts ORDER BY init,id LIMIT ?").all(LIMITS.deliveryRows).map((row) => deliveryAttemptRow(row, db.prepare("SELECT * FROM delivery_attempt_scopes WHERE attempt=? ORDER BY init,binding").all(row.id).map(deliveryScopeRow)));
+    const attempts = db.prepare(`SELECT a.*,s.binding AS scope_binding,s.binding_generation AS scope_generation,
+        s.authority AS scope_authority,s.worker AS scope_worker,s.sid AS scope_sid,s.epoch AS scope_epoch,
+        s.revision AS scope_revision,s.pending_msg AS scope_pending_msg,s.pending_work AS scope_pending_work,
+        s.recoverable_msg AS scope_recoverable_msg,s.recoverable_work AS scope_recoverable_work,s.init AS scope_init
+      FROM (SELECT * FROM delivery_attempts ORDER BY init,id LIMIT ?) a
+      LEFT JOIN delivery_attempt_scopes s ON s.attempt=a.id ORDER BY a.init,a.id,s.init,s.binding`).all(LIMITS.deliveryRows);
+    const grouped = new Map();
+    for (const row of attempts) {
+      let item = grouped.get(row.id);
+      if (!item) { item = { row, scopes: [] }; grouped.set(row.id, item); }
+      if (row.scope_binding !== null) item.scopes.push(deliveryScopeRow({ binding: row.scope_binding, binding_generation: row.scope_generation,
+        authority: row.scope_authority, worker: row.scope_worker, sid: row.scope_sid, epoch: row.scope_epoch, revision: row.scope_revision,
+        pending_msg: row.scope_pending_msg, pending_work: row.scope_pending_work, recoverable_msg: row.scope_recoverable_msg,
+        recoverable_work: row.scope_recoverable_work, init: row.scope_init }));
+    }
+    return [...grouped.values()].map(({ row, scopes }) => deliveryAttemptRow(row, scopes));
   });
 }
 
@@ -1236,6 +1300,23 @@ const rpcFields = {
   pending: ["sid"], stats: [], audit: ["options"], report: ["sid", "report"], snapshot: ["options"], attempt: ["sid", "lease"],
 };
 function grantHas(list, value) { return Array.isArray(list) && list.includes(value); }
+function messageReadSql(authorization) {
+  if (!authorization) return { sql: "", params: [] };
+  const grant = authorization.principal?.grant ?? {};
+  const clauses = [];
+  const params = [];
+  if (grant.inspect?.messages === true) clauses.push("board IS NULL");
+  for (const field of ["workers", "inboxRead", "workRead"]) {
+    const values = Array.isArray(grant[field]) ? grant[field].filter((value) => typeof value === "string") : [];
+    if (values.length > 256) throw new Fault("auth", "Message authorization scope is invalid");
+    if (!values.length) continue;
+    const placeholders = values.map(() => "?").join(",");
+    if (field === "workers") clauses.push(`(board IS NULL AND recipient IN (${placeholders}))`);
+    else clauses.push(`(board IN (${placeholders}) AND kind='${field === "inboxRead" ? "msg" : "work"}')`);
+    params.push(...values);
+  }
+  return { sql: ` AND (${clauses.length ? clauses.join(" OR ") : "0"})`, params };
+}
 function canReadMessage(authorization, row) {
   const grant = authorization.principal.grant;
   if (row.board) return grantHas(row.kind === "msg" ? grant.inboxRead : grant.workRead, row.board);
@@ -1299,6 +1380,8 @@ function replayResult(relay, row, authorization) {
     if (!session || (!local && session.principal !== authorization.principal.id) || session.epoch !== row.epoch || session.epoch !== session.current_epoch) throw new Fault("session", "Request outcome belongs to a superseded session", { sid: row.sid });
   }
   if (row.op === "claim") {
+    if (result === null) return null;
+    if (!row.lease) throw new Fault("expired", "Claim replay has no retained lease", { lease: row.lease });
     const lease = relay._store.db.prepare("SELECT l.*,m.kind,m.data,m.state AS message_state FROM leases l JOIN messages m ON m.id=l.mid WHERE l.id=?").get(row.lease);
     if (!lease || lease.state !== "live" || lease.message_state !== "claimed" || lease.until <= Date.now() || lease.sid !== row.sid || lease.epoch !== row.epoch) throw new Fault("expired", "Claim replay is no longer live", { lease: row.lease });
     return { id: lease.id, mid: lease.mid, sid: lease.sid, epoch: lease.epoch, until: lease.until, attempt: lease.attempt, kind: lease.kind, ...safeJson(lease.data) };
@@ -1355,11 +1438,7 @@ export function dispatchRpc(relay, { authorization, rid, op, args, beforeCommit 
       beforeCommit();
       return { v: 1, rid, committedAt: null, replayed: false, result, remainingMs: null };
     }
-    if (write) {
-      db.prepare("DELETE FROM rpc WHERE until<=?").run(now);
-      const usage = db.prepare("SELECT COUNT(*) AS rows,COALESCE(SUM(bytes),0) AS bytes FROM rpc").get();
-      if (Number(usage.rows) >= relay._store.policy.rpcRows) throw new Fault("full", "RPC journal is full");
-    }
+    db.prepare("DELETE FROM rpc WHERE until<=?").run(now);
     const prior = db.prepare("SELECT * FROM rpc WHERE principal=? AND rid=?").get(principal, rid);
     if (prior) {
       if (prior.hash !== hash || prior.op !== op) throw new Fault("rpc_conflict", "Request ID was used for different content");
@@ -1367,6 +1446,8 @@ export function dispatchRpc(relay, { authorization, rid, op, args, beforeCommit 
       beforeCommit();
       return { v: 1, rid, committedAt: prior.committed, replayed: true, result, remainingMs: op === "claim" && result ? Math.max(0, result.until - Date.now()) : null };
     }
+    const usage = db.prepare("SELECT COUNT(*) AS rows FROM rpc").get();
+    if (Number(usage.rows) >= relay._store.policy.rpcRows) throw new Fault("full", "RPC journal is full");
     const result = invoke(relay, op, args, authorization);
     let sid = args.sid ?? result?.sid ?? (op === "join" ? result?.id : null);
     const originalSession = sid ? db.prepare("SELECT worker,epoch FROM sessions WHERE id=?").get(sid) : null;
@@ -1412,7 +1493,7 @@ export function inspectAttempt(relay, { sid, lease }, authorization = null) {
 }
 
 function reservationRow(row) {
-  return { worker: row.worker, localSid: row.local_sid, remoteSid: row.remote_sid, board: row.board, rid: row.rid,
+  return { worker: row.worker, localSid: row.local_sid, remoteSid: row.remote_sid, board: row.board === "@addressed" ? null : row.board, rid: row.rid,
     authority: row.authority, state: row.state, mid: row.mid, lease: row.lease, epoch: row.epoch, until: row.until,
     settleRid: row.settle_rid, settleOutcome: row.settle_outcome };
 }
@@ -1423,21 +1504,21 @@ export function reserveCapacity(relay, value) {
   validateAddress(value.worker); input(typeof value.localSid === "string" && value.localSid.length > 0 && value.localSid.length <= 128 && typeof value.rid === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.rid), "Invalid reservation identity");
   input(value.remoteSid === null || (typeof value.remoteSid === "string" && value.remoteSid.length <= 128), "Invalid remote session");
   input(typeof value.authority === "string" && value.authority.length > 0 && value.authority.length <= 128, "Invalid authority");
-  input(typeof value.board === "string" && (value.board === "bounty" || /^host:[A-Za-z0-9._-]{1,128}$/.test(value.board)), "Invalid reservation board");
+  input(value.board === null || (typeof value.board === "string" && value.board !== "@addressed" && (value.board === "bounty" || /^host:[A-Za-z0-9._-]{1,128}$/.test(value.board))), "Invalid reservation board");
   validateAddress(value.worker); input(Number.isInteger(value.maxJobs) && value.maxJobs >= 1 && value.maxJobs <= 128, "Invalid maxJobs");
   return tx(relay, "write", ({ db, now }) => {
     const local = value.authority === relay.authority;
     const localSession = getSession(db, value.localSid, now);
     if (localSession.worker !== value.worker) throw new Fault("owner", "Reservation worker does not own the local session");
-    if (local && !db.prepare("SELECT 1 FROM boards WHERE id=?").get(value.board)) throw new Fault("board", "Local reservation board does not exist");
+    if (local && value.board !== null && !db.prepare("SELECT 1 FROM boards WHERE id=?").get(value.board)) throw new Fault("board", "Local reservation board does not exist");
     const prior = db.prepare("SELECT * FROM reservations WHERE worker=?").get(value.worker);
     if (prior) {
-      if (prior.local_sid !== value.localSid || prior.remote_sid !== value.remoteSid || prior.board !== value.board || prior.rid !== value.rid || prior.authority !== value.authority) throw new Fault("rpc_conflict", "Worker already has a different reservation");
+      if (prior.local_sid !== value.localSid || prior.remote_sid !== value.remoteSid || prior.board !== (value.board ?? "@addressed") || prior.rid !== value.rid || prior.authority !== value.authority) throw new Fault("rpc_conflict", "Worker already has a different reservation");
       return reservationRow(prior);
     }
     if (Number(db.prepare("SELECT COUNT(*) AS n FROM reservations").get().n) >= value.maxJobs) throw new Fault("full", "Board assignment capacity is reserved");
     if (local !== (value.remoteSid === null)) throw new Fault("input", "Reservation session does not match board authority");
-    db.prepare("INSERT INTO reservations(worker,local_sid,remote_sid,board,rid,authority,state) VALUES(?,?,?,?,?,?,'reserved')").run(value.worker, value.localSid, value.remoteSid, value.board, value.rid, value.authority);
+    db.prepare("INSERT INTO reservations(worker,local_sid,remote_sid,board,rid,authority,state) VALUES(?,?,?,?,?,?,'reserved')").run(value.worker, value.localSid, value.remoteSid, value.board ?? "@addressed", value.rid, value.authority);
     return reservationRow(db.prepare("SELECT * FROM reservations WHERE worker=?").get(value.worker));
   });
 }
@@ -1449,10 +1530,17 @@ export function bindCapacity(relay, value) {
   input(typeof value.rid === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.rid) && typeof value.authority === "string" && value.authority.length > 0 && value.authority.length <= 128, "Invalid reservation binding identity");
   const lease = value.lease;
   input(lease && typeof lease === "object" && !Array.isArray(lease) && typeof lease.id === "string" && lease.id.length > 0 && lease.id.length <= 128 && typeof lease.mid === "string" && lease.mid.length > 0 && lease.mid.length <= 128 && typeof lease.sid === "string" && lease.sid.length > 0 && lease.sid.length <= 128 && Number.isSafeInteger(lease.epoch) && lease.epoch >= 0 && Number.isSafeInteger(lease.until) && lease.until >= 0 && Number.isSafeInteger(lease.attempt) && lease.attempt >= 1 && lease.kind === "work", "Invalid accepted work lease");
-  return tx(relay, "write", ({ db }) => {
+  return tx(relay, "write", ({ db, now }) => {
     const row = db.prepare("SELECT * FROM reservations WHERE worker=? AND rid=? AND authority=?").get(value.worker, value.rid, value.authority);
     if (!row) throw new Fault("missing", "Reservation does not exist");
     if (value.lease.kind !== "work" || value.lease.sid !== (row.remote_sid ?? row.local_sid)) throw new Fault("lease", "Lease does not match the reserved authority");
+    if (row.authority === relay.authority) {
+      const localLease = db.prepare(`SELECT l.*,m.state AS message_state,m.kind,m.recipient,m.board,s.worker,s.ended,s.until AS session_until,s.epoch AS session_epoch,a.epoch AS current_epoch
+        FROM leases l JOIN messages m ON m.id=l.mid JOIN sessions s ON s.id=l.sid JOIN agents a ON a.id=s.worker WHERE l.id=?`).get(value.lease.id);
+      const expectedBoard = row.board === "@addressed" ? null : row.board;
+      const expectedRecipient = expectedBoard === null ? row.worker : null;
+      if (!localLease || localLease.mid !== value.lease.mid || localLease.sid !== row.local_sid || localLease.worker !== row.worker || localLease.recipient !== expectedRecipient || localLease.board !== expectedBoard || localLease.kind !== "work" || localLease.message_state !== "claimed" || localLease.state !== "live" || localLease.until <= now || localLease.until !== value.lease.until || localLease.epoch !== value.lease.epoch || localLease.attempt !== value.lease.attempt || localLease.epoch !== localLease.session_epoch || localLease.epoch !== localLease.current_epoch || localLease.ended !== null || localLease.session_until <= now) throw new Fault("lease", "Local work lease is not current for this reservation");
+    }
     if (row.state === "held") {
       if (row.lease !== value.lease.id || row.mid !== value.lease.mid) throw new Fault("rpc_conflict", "Reservation is bound to another attempt");
       return reservationRow(row);

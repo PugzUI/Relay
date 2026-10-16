@@ -166,7 +166,8 @@ test("A47 layout keeps narrow panes readable, keyboard focus visible, and reduce
   assert.match(style, /:focus-visible\s*\{[^}]*outline/);
   assert.match(style, /@media \(max-width: 760px\)[\s\S]*?\.panes\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(style, /@media \(prefers-reduced-motion: reduce\)/);
-  assert.match(style, /border-radius: 0 !important/);
+  assert.match(style, /--r-none:\s*0(?:px)?\s*;/);
+  assert.match(style, /\*\s*\{[^}]*border-radius:\s*var\(--r-none\)\s*!important/);
   assert.doesNotMatch(style, /overflow-x:\s*hidden/);
 });
 

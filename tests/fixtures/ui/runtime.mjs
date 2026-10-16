@@ -9,8 +9,23 @@ class Element extends EventTarget {
   value = "";
   disabled = false;
   isConnected = false;
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  parentNode = null;
+  get firstChild() { return this.children[0] ?? null; }
+  get nextSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] ?? null; }
+  append(...children) { for (const child of children) this.insertBefore(child, null); }
+  insertBefore(child, anchor) {
+    if (anchor !== null && !this.children.includes(anchor)) throw new Error("Anchor is not a child");
+    if (child === anchor) return child;
+    child.remove();
+    this.children.splice(anchor === null ? this.children.length : this.children.indexOf(anchor), 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  remove() {
+    if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
+    this.parentNode = null;
+  }
+  replaceChildren(...children) { for (const child of [...this.children]) child.remove(); this.append(...children); }
   setAttribute() {}
   querySelectorAll() { return []; }
 }

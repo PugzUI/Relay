@@ -1,9 +1,11 @@
 import { isIP } from "node:net";
-import { open as openFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open as openFile, rm, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Fault } from "./fault.mjs";
 import { DELIVERY_CLIENTS, LIMITS } from "./validate.mjs";
+import { parseStrictJsonText } from "./strict-json.mjs";
 
 const fail = (message) => { throw new Fault("input", message); };
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -27,7 +29,7 @@ const tags = (value, label) => {
 };
 const privateFile = async (path, label, { mode = false } = {}) => {
   let handle;
-  try { handle = await openFile(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW)); }
+  try { handle = await openFile(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK)); }
   catch { throw new Fault("unavailable", `${label} is unavailable or unsafe`); }
   try {
     const stat = await handle.stat();
@@ -37,72 +39,9 @@ const privateFile = async (path, label, { mode = false } = {}) => {
   } finally { await handle.close(); }
 };
 
-// JSON.parse silently accepts duplicate object keys. This bounded recursive parser
-// rejects them before either security-sensitive document is interpreted.
 export function parseJsonStrict(text, maxBytes = 1_048_576) {
-  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > maxBytes) fail("JSON document is too large");
-  let i = 0;
-  const ws = () => { while (i < text.length && /[\t\n\r ]/.test(text[i])) i++; };
-  const string = () => {
-    const start = i++;
-    while (i < text.length) {
-      const c = text.charCodeAt(i++);
-      if (c === 34) {
-        try { return JSON.parse(text.slice(start, i)); } catch { fail("JSON string is invalid"); }
-      }
-      if (c < 0x20) fail("JSON string contains a control character");
-      if (c === 92) {
-        if (i >= text.length) fail("JSON escape is incomplete");
-        const e = text[i++];
-        if (e === "u") {
-          if (!/^[0-9a-fA-F]{4}$/.test(text.slice(i, i + 4))) fail("JSON unicode escape is invalid");
-          i += 4;
-        } else if (!'"\\/bfnrt'.includes(e)) fail("JSON escape is invalid");
-      }
-    }
-    fail("JSON string is incomplete");
-  };
-  const value = (depth) => {
-    if (depth > 64) fail("JSON nesting is too deep");
-    ws();
-    const c = text[i];
-    if (c === '"') return string();
-    if (c === "{") {
-      i++; ws(); const out = {};
-      if (text[i] === "}") { i++; return out; }
-      for (;;) {
-        ws(); if (text[i] !== '"') fail("JSON object key is invalid");
-        const key = string(); if (Object.hasOwn(out, key)) fail("JSON object has a duplicate key");
-        ws(); if (text[i++] !== ":") fail("JSON object separator is invalid");
-        Object.defineProperty(out, key, { value: value(depth + 1), enumerable: true, writable: true, configurable: true }); ws();
-        if (text[i] === "}") { i++; return out; }
-        if (text[i++] !== ",") fail("JSON object separator is invalid");
-      }
-    }
-    if (c === "[") {
-      i++; ws(); const out = [];
-      if (text[i] === "]") { i++; return out; }
-      for (;;) {
-        out.push(value(depth + 1)); ws();
-        if (text[i] === "]") { i++; return out; }
-        if (text[i++] !== ",") fail("JSON array separator is invalid");
-      }
-    }
-    const rest = text.slice(i);
-    for (const [literal, result] of [["true", true], ["false", false], ["null", null]]) {
-      if (rest.startsWith(literal)) { i += literal.length; return result; }
-    }
-    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest);
-    if (match) {
-      i += match[0].length; const n = Number(match[0]);
-      if (!Number.isFinite(n)) fail("JSON number is not finite");
-      return n;
-    }
-    fail("JSON value is invalid");
-  };
-  const result = value(0); ws();
-  if (i !== text.length) fail("JSON has trailing data");
-  return result;
+  try { return parseStrictJsonText(text, { maxBytes, maxDepth: 64 }); }
+  catch (error) { throw new Fault("input", error.message); }
 }
 
 function origin(value, label) {
@@ -131,21 +70,104 @@ function validateLaunch(value) {
   return Object.freeze({ runtime, executable, args: [...value.args], cwd, capabilities: tags(value.capabilities, "launch.capabilities"), maxChildren: int(value.maxChildren, "launch.maxChildren", 1, 16), readyTimeoutMs: int(value.readyTimeoutMs, "launch.readyTimeoutMs", 1000, 60000) });
 }
 
+export async function prepareLocalProfile(root, configFile) {
+  const directory = dirname(resolve(configFile));
+  const file = resolve(configFile);
+  const tokenFile = join(directory, "viewer.token");
+  const registryFile = join(directory, "credentials.json");
+  const lockFile = join(directory, ".setup.lock");
+  const exists = async (path) => {
+    try { await lstat(path); return true; }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  };
+  const reuse = async () => {
+    const selected = await readConfig(file);
+    if (selected.mode !== "local" || selected.role !== "host" || selected.hub || selected.pool || selected.delivery.enabled) {
+      fail("Local startup requires a loopback host profile without agents; use explicit --root and --config for other profiles");
+    }
+    const { readToken } = await import("./client.mjs");
+    const { authenticate, loadRegistry } = await import("./auth.mjs");
+    const token = await readToken(tokenFile);
+    authenticate(await loadRegistry(selected.credentialsFile), `Bearer ${token}`);
+    return { tokenFile };
+  };
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await lstat(directory);
+  if (info.isSymbolicLink() || !info.isDirectory() || process.platform !== "win32" && (info.uid !== process.getuid() || (info.mode & 0o077) !== 0)) {
+    throw new Fault("denied", "Local profile must be an owned private directory, not a symlink");
+  }
+  if (await exists(file)) return reuse();
+  let lock;
+  try { lock = await openFile(lockFile, "wx", 0o600); }
+  catch (error) {
+    if (error.code === "EEXIST") throw new Fault("active", "Local profile initialization is locked; inspect .local/.setup.lock before retrying");
+    throw error;
+  }
+  let staging, failure;
+  const published = [];
+  try {
+    if (await exists(file)) return await reuse();
+    if (await exists(tokenFile) || await exists(registryFile)) {
+      throw new Fault("active", "Local credentials exist without a config; refusing to replace them");
+    }
+    const { open, setup } = await import("./relay.mjs");
+    let device;
+    if (await exists(root)) {
+      const relay = open({ root, role: "host", readOnly: true });
+      try { device = relay.device; } finally { relay.close(); }
+    } else device = setup({ root, device: "relay-local", role: "host" });
+    const token = randomBytes(32).toString("base64url");
+    const board = `host:${device.id}`;
+    const registry = { version: 1, credentials: [{ principal: "local-viewer", tokenDigest: createHash("sha256").update(token).digest("hex"), grant: {
+      enroll: [], register: [], workers: [], recipients: [], boardPost: [], boardClaim: [],
+      inboxRead: [board], workRead: [board],
+      inspect: { messages: false, receipts: false, audit: false, topology: true }, reportDevice: null,
+    } }] };
+    const selected = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4200 },
+      tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+    staging = await mkdtemp(join(directory, ".setup-"));
+    const files = [["viewer.token", tokenFile, `${token}\n`],
+      ["credentials.json", registryFile, `${JSON.stringify(registry, null, 2)}\n`],
+      ["relay.json", file, `${JSON.stringify(selected, null, 2)}\n`]];
+    for (const [name, , contents] of files) await writeFile(join(staging, name), contents, { mode: 0o600, flag: "wx" });
+    await readConfig(join(staging, "relay.json"));
+    const { loadRegistry } = await import("./auth.mjs");
+    await loadRegistry(join(staging, "credentials.json"));
+    // Publish the config last so a second launcher cannot accept partial credentials.
+    for (const [name, target] of files) {
+      await link(join(staging, name), target);
+      published.push(target);
+    }
+    return { tokenFile };
+  } catch (error) { failure = error; throw error; }
+  finally {
+    const errors = [];
+    const cleanup = [
+      ...(failure ? published.map((path) => () => unlink(path)) : []),
+      () => staging && rm(staging, { recursive: true, force: true }),
+      () => lock.close(), () => unlink(lockFile),
+    ];
+    for (const action of cleanup) { try { await action(); } catch (error) { errors.push(error); } }
+    if (errors.length) throw new AggregateError(failure ? [failure, ...errors] : errors, "Local profile cleanup failed", { cause: failure });
+  }
+}
+
 export async function readConfig(configFile) {
   const file = resolve(str(configFile, "configFile"));
   let doc;
   try {
-    const handle = await openFile(file, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
+    const handle = await openFile(file, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
     try {
       const stat = await handle.stat();
-      if (!stat.isFile() || process.platform !== "win32" && stat.uid !== process.getuid()) fail("input", "Config file must be owned by the current user");
-      if (stat.size > 1_048_576) fail("input", "Config file is too large");
+      if (!stat.isFile() || process.platform !== "win32" && stat.uid !== process.getuid()) fail("Config file must be an owned regular file");
+      if (stat.size > 1_048_576) fail("Config file is too large");
       doc = parseJsonStrict(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()), 1_048_576);
     } finally { await handle.close(); }
   } catch (error) {
     if (error instanceof Fault) throw error;
     throw new Fault("unavailable", "Config file cannot be read");
   }
+  if (!record(doc)) fail("Config must be an object");
   if (![1, 2].includes(doc.version)) fail("Config version is invalid");
   exact(doc, doc.version === 1
     ? ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views"]

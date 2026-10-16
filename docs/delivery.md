@@ -2,6 +2,14 @@
 
 ## Status
 
+The October 16 implementation adds an opt-in recipient consumer to the pinned
+OpenCode plugin: scoped tools, runtime session/lease maintenance and bounded
+bridge reconnection. The default remains notice-only. The notification path
+still does not claim or acknowledge items; only explicit recipient tool calls
+do so. See [idle recipient consumption](idle-consumer.md). Automated integration
+coverage is not full native qualification; the historical probes below retain
+their original meaning and limitations.
+
 The Relay/v2 delivery contract and original read-only native-client inventory remain frozen. The first-party OpenCode plugin targets exactly v2.0.27. An isolated archive-installed probe verified real supervisor/store binding, notice admission and prepared context in the same idle native session, a primary model request, an exact completed model reply, and persisted safe idle. Three further reconciliations did not repeat delivery or consume the pending message. This is a narrow idle-path result, not full adapter qualification: busy/refusal/restart coverage and the other required clients remain open. D01–D26 in [acceptance](acceptance.md) remain pending as full cases. See the [native-delivery spike](../tests/spikes/003-opencode-native-delivery/README.md).
 
 The later [busy-context spike](../tests/spikes/005-opencode-busy-boundary/README.md)

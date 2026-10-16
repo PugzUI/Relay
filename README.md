@@ -72,12 +72,35 @@ The broker serves one read-only topology page with selected-board
 `Inbox | Bounties` panes. It displays committed store state, not simulated
 agent activity. Browser connection does not establish native agent readiness.
 
-Create a broker configuration with the permissions described in
-[network setup](docs/network.md), then serve the initialized store explicitly:
+Start the local dashboard:
 
 ```sh
-node src/cli.mjs serve --root './relay data' --config './relay.json'
+npm start
 ```
+
+On first launch, the existing CLI creates a private local host profile under
+`.local/`: real persisted storage, loopback HTTP on `127.0.0.1:4200`, and a
+read-only viewer credential. It starts no agents and seeds no traffic. Later
+launches reuse the same store and credential. The URL and private token-file
+location are printed, never the token itself. Stop it with Ctrl+C.
+
+On a Wayland desktop with `wl-copy` installed, startup also copies the viewer
+token to the clipboard: paste into **Bearer token** and click **Connect**.
+The token is sent through stdin, never command arguments or logs. If clipboard
+copy is unavailable, the dashboard still starts and reports the token-file path.
+Use `npm start -- --no-copy-token` to skip copying. JSON output and custom
+profiles never touch the clipboard; clipboard support is optional.
+
+For an existing operator-managed profile, supply both selectors:
+
+```sh
+npm start -- --root './relay data' --config './relay.json'
+```
+
+`--` forwards options to the existing broker CLI. Custom profiles are not
+initialized or overwritten. See [network setup](docs/network.md) for their
+configuration and permissions. An installed package uses `relay serve` with
+the same local defaults, or `relay serve --root PATH --config FILE`.
 
 Open the configured origin and connect with its private bearer token. The token
 stays in browser memory and is not stored in a URL. The interface does not
@@ -100,6 +123,10 @@ Relay’s durable queue does not itself invoke an agent session or wake an idle
 runtime. Optional native delivery is disabled by default and remains
 unqualified; see the
 [delivery contract and client inventory](docs/delivery.md).
+An explicit `consume: true` option enables the pinned OpenCode plugin's
+scoped recipient tools and runtime session/lease maintenance. Notice-only
+behavior remains the default. See [idle recipient consumption](docs/idle-consumer.md)
+for configuration and the remaining native qualification boundary.
 
 ## Network and setup
 

@@ -7,21 +7,24 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { join, resolve } from "node:path";
 import { parseJsonStrict } from "../config.mjs";
 import { deliveryTargetDigest } from "../relay.mjs";
-import { openCodeSocketPath } from "./opencode-bridge.mjs";
+import { openCodeSocketPath, readOpenCodeTokenFile } from "./opencode-bridge.mjs";
 
 export const client = "opencode";
 export const evidence = "pending";
 export const capabilities = Object.freeze({ context: true, idle: true, launch: false });
 
-const MAX_BODY = 16 * 1024;
-const MAX_RESPONSE = 24 * 1024;
+// A 4 KiB reply can expand sixfold when JSON escapes control characters.
+const MAX_BODY = 32 * 1024;
+const MAX_RESPONSE = 96 * 1024;
 const MAX_BINDINGS = 16;
 const COMMAND_MS = 2500;
 const POLL_MS = 12000;
 const LEASE_MS = 30000;
 const RID = /^[A-Za-z0-9_-]{1,64}$/;
+const LEASE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const METHODS = new Set(["status", "submit"]);
 const OBSERVATIONS = new Set(["held", "refused", "context_observed", "turn_started", "safe_idle"]);
+const RECIPIENT_OPS = new Set(["pending", "renew", "claim", "touch", "ack", "release", "reply"]);
 
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,6 +39,17 @@ function validObservation(value) {
     && OBSERVATIONS.has(value.state)
     && Object.keys(value).every((key) => key === "state" || key === "nativeRequestId")
     && (value.nativeRequestId === undefined || typeof value.nativeRequestId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.nativeRequestId));
+}
+
+function validRecipientArgs(op, args) {
+  if (!RECIPIENT_OPS.has(op) || !object(args)) return false;
+  if (op === "pending" || op === "renew") return exact(args, []);
+  if (op === "claim") return exact(args, ["kind"]) && ["msg", "work"].includes(args.kind);
+  if (op === "touch" || op === "release") return exact(args, ["lease"]) && typeof args.lease === "string" && LEASE_ID.test(args.lease);
+  if (op === "ack") return exact(args, ["lease", "outcome"]) && typeof args.lease === "string" && LEASE_ID.test(args.lease)
+    && ["done", "failed", "rejected"].includes(args.outcome);
+  return exact(args, ["key", "lease", "msg"]) && typeof args.lease === "string" && LEASE_ID.test(args.lease)
+    && typeof args.key === "string" && LEASE_ID.test(args.key) && typeof args.msg === "string" && Buffer.byteLength(args.msg, "utf8") <= 4096;
 }
 
 function response(res, rid, result, status = 200) {
@@ -68,7 +82,7 @@ async function readBody(req) {
     chunks.push(chunk);
   }
   if (size !== Number(length)) throw new Error("body length mismatch");
-  return parseJsonStrict(Buffer.concat(chunks).toString("utf8"), MAX_BODY);
+  return parseJsonStrict(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)), MAX_BODY);
 }
 
 function validEnvelope(value) {
@@ -104,17 +118,12 @@ async function recoverStaleSocket(socketPath) {
 }
 
 async function removeStaleToken(tokenPath) {
-  let handle;
-  try { handle = await open(tokenPath, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  let token;
+  try { token = await readOpenCodeTokenFile(tokenPath); }
   catch (error) { if (error.code === "ENOENT") return; throw error; }
-  try {
-    const info = await handle.stat();
-    const content = await handle.readFile();
-    if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0 || content.byteLength !== 64 || !/^[a-f0-9]{64}$/.test(content.toString("ascii"))) throw new Error("Existing bridge token is not a private Relay token");
-    content.fill(0);
-  } finally {
-    await handle.close();
-  }
+  const current = await lstat(tokenPath);
+  if (!current.isFile() || current.uid !== process.getuid() || (current.mode & 0o077) !== 0
+    || current.dev !== token.dev || current.ino !== token.ino) throw new Error("Native bridge token ownership changed");
   await unlink(tokenPath);
 }
 
@@ -251,20 +260,22 @@ export async function startDeliveryAdapter({ client: selected, bind, signal, roo
   }
 
   async function bindNative(args) {
-    if (!exact(args, ["authority", "capabilities", "epoch", "profile", "sid", "target", "worker"])
+    const bindKeys = ["authority", "capabilities", "epoch", "profile", "sid", "target", "worker"];
+    if (!object(args) || !(exact(args, bindKeys) || exact(args, [...bindKeys, "consume"]))
+      || args.consume !== undefined && args.consume !== true
       || typeof args.authority !== "string" || !Number.isSafeInteger(args.epoch) || args.epoch < 0
       || typeof args.sid !== "string" || typeof args.worker !== "string" || typeof args.profile !== "string"
       || !object(args.target) || args.target.profile !== args.profile || args.target.client !== undefined
       || !exact(args.capabilities, ["context", "idle", "launch"])
       || args.capabilities.context !== true || args.capabilities.idle !== true || args.capabilities.launch !== false) throw new Error("Invalid binding");
-    if (registrations.size >= MAX_BINDINGS) throw new Error("Binding capacity is full");
-
     const digest = deliveryTargetDigest(args.target);
     let record = targets.get(digest);
     let created = false;
     if (record && (record.closed || record.target.runtimeInstance !== args.target.runtimeInstance || record.target.lifecycleGeneration !== args.target.lifecycleGeneration)) {
-      throw new Error("A different native lifecycle already owns this target");
+      if (!record.closed) await closeTarget(record);
+      record = null;
     }
+    if (registrations.size >= MAX_BINDINGS) throw new Error("Binding capacity is full");
     if (!record) {
       record = {
         digest,
@@ -289,7 +300,7 @@ export async function startDeliveryAdapter({ client: selected, bind, signal, roo
       targets.set(digest, record);
       created = true;
     }
-    const registration = { id: randomUUID(), target: record, handle: null, closed: false };
+    const registration = { id: randomUUID(), target: record, handle: null, closed: false, consume: args.consume === true };
     try {
       const handle = await bind({
         authority: args.authority,
@@ -301,7 +312,8 @@ export async function startDeliveryAdapter({ client: selected, bind, signal, roo
         capabilities: args.capabilities,
         consumer: record.consumer,
       });
-      if (!handle || typeof handle.close !== "function" || typeof handle.observe !== "function") {
+      if (!handle || typeof handle.close !== "function" || typeof handle.observe !== "function"
+        || args.consume === true && typeof handle.recipient !== "function") {
         await Promise.resolve(handle?.close?.()).catch(() => {});
         throw new Error("Relay returned an invalid native binding handle");
       }
@@ -396,6 +408,14 @@ export async function startDeliveryAdapter({ client: selected, bind, signal, roo
         while (record.observations.size > 128) record.observations.delete(record.observations.keys().next().value);
         const applied = await registration.handle.observe(args.attemptId, args.observation);
         return response(res, rid, { applied: applied === true });
+      }
+      if (body.op === "delivery.recipient") {
+        if (!exact(args, ["args", "bindingId", "op"]) || typeof args.bindingId !== "string"
+          || typeof args.op !== "string" || !validRecipientArgs(args.op, args.args)) throw new Error("recipient");
+        const registration = registrations.get(args.bindingId);
+        if (!registration || registration.closed || !registration.consume || typeof registration.handle.recipient !== "function") throw new Error("recipient binding");
+        const result = await registration.handle.recipient(args.op, args.args);
+        return response(res, rid, result);
       }
       if (body.op === "delivery.close") {
         if (!exact(args, ["bindingId"]) || typeof args.bindingId !== "string") throw new Error("close");
