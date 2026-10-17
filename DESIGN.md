@@ -2,7 +2,7 @@
 
 ## Authority and scope
 
-This is Relay's portable visual contract. `ui/style.css` owns the executable CSS variables; Wonder is an editable, static mirror of those same roles, not a second theme. Relay uses locally bundled Lit for rendering, native SVG and CSS. It does not require private tooling, a remote font service, a CDN, React or a dashboard kit at runtime.
+This is Relay's portable visual contract. `ui/style.css` owns the executable CSS variables; Wonder is an editable, static mirror of those same roles, not a second theme. Relay uses locally bundled Lit for rendering, native SVG and CSS. It does not require private tooling, a remote font service, a CDN, React or a dashboard kit at runtime. (Lit + light DOM + native SVG selected over Svelte/Solid/Datastar/Qwik and canvas graph engines; the renderer comparison fixture records the rejected alternatives.)
 
 Use a dense, flat operational workspace: black and neutral surfaces, readable light text, deliberate one-pixel divisions, lime activity and square corners. Content and validated Relay state determine the display. Show real committed records and explicit connection, cached, empty and failure states. Never invent traffic, readiness, metrics, receipts or presentation copy. Immutable creation time (`init`) is not a readiness signal.
 

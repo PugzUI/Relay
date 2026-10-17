@@ -36,6 +36,15 @@ owners and updated here before implementation diverges.
 - A local `open()` is synchronous and owns one SQLite handle. Remote `connect()`
   and server `serve()` are asynchronous. No function starts a listener except
   `serve()` / the explicit CLI `serve` command.
+- Out of scope: queue replication, peer mesh, broker federation,
+  shared/network-mounted SQLite, public ingress, DAG or general scheduler,
+  automatic task decomposition, model routing, runtime installer, arbitrary
+  remote shell, general plugin system, automatic desktop/UI automation,
+  arbitrary process launch, general dashboard, diagram editor, or second state
+  engine. No exactly-once external execution or cross-platform support without
+  platform-specific qualification. No live authority/queue migration; the
+  delivery schema extension is a separate explicit, backed-up migration that
+  preserves existing store records.
 
 ### Frozen public signatures
 
@@ -93,7 +102,7 @@ frozen while lane work is in progress.
 
 | Owner | Exact owned paths |
 |---|---|
-| Foundation | `package.json`, `package-lock.json`, `LICENSE`, `src/index.mjs`, `src/index.d.ts`, `scripts/check.mjs`, `.github/workflows/ci.yml`, `docs/contract.md`, `docs/acceptance.md`, `docs/spec.md` |
+| Foundation | `package.json`, `package-lock.json`, `LICENSE`, `src/index.mjs`, `src/index.d.ts`, `scripts/check.mjs`, `.github/workflows/ci.yml`, `docs/contract.md`, `docs/acceptance.md` |
 | CORE | `src/relay.mjs`, `src/schema.sql`, `src/sqlite.mjs`, `src/fault.mjs`, `src/validate.mjs`, `src/feed.mjs`; core, storage, board, device, and topology tests |
 | NETWORK/POOL | `src/broker.mjs`, `src/client.mjs`, `src/auth.mjs`, `src/config.mjs`, `src/pool.mjs`; network and pool tests |
 | CLI/QA/DOCS | `src/cli.mjs`, `examples/*`, `tests/fixtures/ui/*`, `README.md`, `docs/api.md`, `docs/storage.md`, `docs/limits.md`, `docs/network.md`, `docs/boards.md`, `docs/topology.md`; CLI/example tests |

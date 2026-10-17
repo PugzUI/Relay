@@ -10,7 +10,7 @@ The functional overview uses locally bundled Lit Web Components, native SVG
 links, and one external PugzUI stylesheet. Light DOM preserves native controls
 and theme access without relaxing CSP. The existing controller and parsed Relay
 state remain authoritative; components own rendering and local view preferences
-only. See [UI decisions and source comparison](ui-decisions.md).
+only.
 
 The summary rail shows scoped device/worker/board totals and explicitly labeled
 visible busy-worker/active-link counts. A missing snapshot is unknown, not zero.
@@ -58,7 +58,9 @@ exception count. Metadata contains board and row counts but no pane bodies,
 tokens, session IDs, or local paths. It requires an actual isolated Relay
 broker; it does not mock UI responses. New captures go to an owned temporary
 evidence directory, not the README or tracked image gallery. The retained images and
-[capture metadata](media/capture.json) are from a real authenticated run.
+The capture fixture (`tests/fixtures/ui/capture.mjs`) regenerates runtime
+metadata per run from a real authenticated session. New captures go to an
+owned temporary evidence directory, not a tracked image gallery.
 Wide and narrow layouts were visually reviewed. Native browser checks also
 exercised metadata-only and work-only permissions, credential revocation,
 an empty store, actual broker stop/restart, and HTML-like text rendered inertly.

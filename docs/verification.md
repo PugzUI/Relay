@@ -114,10 +114,12 @@ when a body view is unavailable.
 
 ## Rendered interface
 
-The committed [capture metadata](media/capture.json) records the actual browser,
-runtime, measured viewport/document/pixel geometry, selected board and pane row
-counts. It records no message body, token, session ID or private filesystem
-path. The images contain only synthetic demo data.
+The capture fixture (`tests/fixtures/ui/capture.mjs`) regenerates browser
+metadata per run: actual browser, runtime, measured viewport/document/pixel
+geometry, selected board and pane row counts. It records no message body,
+token, session ID or private filesystem path. Captures go to an owned
+temporary evidence directory, not a tracked gallery. The images contain only
+synthetic demo data.
 
 Native [browser checks](media/browser-qa.json) exercised:
 
