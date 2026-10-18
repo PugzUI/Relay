@@ -53,8 +53,8 @@ class RelayOverview extends ConsoleElement {
 }
 
 class RelayInspector extends ConsoleElement {
-  static properties = { snapshot: field, selection: field, connection: field };
-  constructor() { super(); this.snapshot = null; this.selection = null; this.connection = "disconnected"; }
+  static properties = { snapshot: field, selection: field, query: field, connection: field };
+  constructor() { super(); this.snapshot = null; this.selection = null; this.query = ""; this.connection = "disconnected"; }
   render() {
     const snapshot = this.snapshot;
     const agent = snapshot?.agents.find((row) => row.id === this.selection);
@@ -62,6 +62,11 @@ class RelayInspector extends ConsoleElement {
     const board = snapshot?.boards.find((row) => row.id === this.selection);
     const entity = agent ?? board ?? device;
     if (!entity) return html`<div class="inspector-empty">${snapshot ? "Select a device, worker or board" : "No snapshot"}</div>`;
+    const query = this.query.trim().toLowerCase();
+    const matches = (value) => value.toLowerCase().includes(query);
+    const filteredOut = Boolean(query && (agent
+      ? !matches(`${device?.name ?? ""} ${device?.id ?? agent.device}`) && !matches(`${agent.id} ${agent.caps.join(" ")}`)
+      : board ? !matches(`${board.id} ${board.kind}`) : !matches(`${device.name} ${device.id}`)));
     let rows;
     if (agent) rows = [["State", agent.state], ["Device", device?.name ?? agent.device], ["Runtime", agent.runtime],
       ["Slot", agent.slot], ["Epoch", agent.epoch], ["Assignments", agent.assignmentCount],
@@ -74,7 +79,8 @@ class RelayInspector extends ConsoleElement {
       ["Free slots", deviceFresh(device, snapshot) ? count(device.free) : "unknown"],
       ["Report age", age(device.receivedAt, snapshot.time, device.authority === snapshot.authority, device.stale)],
       ["Created · UTC", timestamp(device.init)]];
-    return html`<div class="inspector-identity"><span class="eyebrow">${agent ? "Worker" : board ? "Board" : "Device"}${this.connection !== "connected" ? " · cached" : ""}</span><h3>${entity.id}</h3></div>
+    const context = [agent ? "Worker" : board ? "Board" : "Device", this.connection !== "connected" ? "cached" : "", filteredOut ? "filtered out" : ""].filter(Boolean).join(" · ");
+    return html`<div class="inspector-identity"><span class="eyebrow">${context}</span><h3>${entity.id}</h3></div>
       <dl class="inspector-fields">${rows.map(([label, value]) => html`<div><dt>${label}</dt><dd>${value}</dd></div>`)}</dl>`;
   }
 }

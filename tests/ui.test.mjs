@@ -168,6 +168,7 @@ test("A47 layout keeps narrow panes readable, keyboard focus visible, and reduce
   assert.match(style, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(style, /--r-none:\s*0(?:px)?\s*;/);
   assert.match(style, /\*\s*\{[^}]*border-radius:\s*var\(--r-none\)\s*!important/);
+  assert.match(style, /\.connection\[data-state="disconnected"\]\s*\{[^}]*color:\s*var\(--c-danger\)/);
   assert.doesNotMatch(style, /overflow-x:\s*hidden/);
 });
 

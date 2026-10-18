@@ -240,6 +240,7 @@ function renderViews() {
   topologyNode.selectedNode = state.selectedNode;
   topologyNode.pulses = state.pulses;
   byId("inspector").selection = state.selectedNode;
+  byId("inspector").query = topologyNode.query;
 }
 
 function drawTopology(snapshot = state.snapshot) {
@@ -659,7 +660,10 @@ topologyNode.addEventListener("select-node", (event) => {
   renderViews();
 });
 topologyNode.addEventListener("select-board", (event) => chooseBoard(event.detail));
-byId("node-filter").addEventListener("input", (event) => { topologyNode.query = event.target.value.slice(0, 128); });
+byId("node-filter").addEventListener("input", (event) => {
+  topologyNode.query = event.target.value.slice(0, 128);
+  renderViews();
+});
 byId("expand-all").addEventListener("click", () => topologyNode.expandAll());
 byId("refresh").addEventListener("click", () => refreshSnapshot(true));
 byId("disconnect").addEventListener("click", () => {

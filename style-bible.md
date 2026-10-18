@@ -59,7 +59,7 @@ The surface is intentionally untextured. Icons are small line or glyph marks alr
 - Selected nodes use lime edge weight and a readable status label.
 - Boards use teal role accents; workers remain neutral until selected.
 - Denied and disconnected states use explicit red text/markers and recovery copy.
-- Empty and filtered states use an intentional message in the workspace rather than disappearing controls.
+- Empty and filtered states use an intentional message in the workspace rather than disappearing controls. A retained inspector labels a selected object as filtered out so continuity is explicit.
 - Cached state is named as cached and visually separated from connected state.
 
 ## Responsive composition

@@ -41,7 +41,29 @@
 - Disconnected, denied, cached, and empty states are explicit and visually distinct.
 - Text at 200% remains readable in the captured narrow state.
 
-**Remaining review item:** the agent family spawned for an independent critic could not be collected because the plugin returned `AGENTS_BUSY: no agent family belongs to this conversation`. This ledger is therefore an explicitly non-independent review. A human should inspect the live experience with a real device/browser pair before publication.
+**Historical note:** this round was explicitly non-independent because the first critic worker family could not be collected. It is retained as a record of the self-review, not as the final approval.
+
+## Round 3: independent final review and correction pass
+
+**Evidence:** fresh independent inspection of the rendered frames, the live fixture, and the responsive capture runner on 2026-10-18.
+
+**Findings**
+
+1. A retained inspector selection needed an explicit `filtered out` cue when a query produced no matching topology nodes.
+2. The narrow filter control was visually cramped; a full-row control makes its placeholder and action affordance readable at 390px.
+3. Disconnected state needed the red failure marker defined by the style bible.
+4. The original narrow frame did not show the lower board/inspector lane.
+
+**Corrections**
+
+- The inspector now receives the active query and labels a retained selection `Worker · filtered out` when the result set hides it.
+- Narrow filters occupy a full row while action buttons retain their 96px contract.
+- Disconnected connection markers use the danger role color.
+- Added `docs/frames/04-mobile-board-lane.png` and `docs/captures/responsive-capture.json`; refreshed the filtered and top narrow frames from the current fixture.
+
+**Verification:** overview fixture 18 passed with zero runtime exceptions and zero CSP violations; native package checks and repository tests rerun after the correction pass.
+
+**Independent verdict:** `ship` for the scoped source and fixture-verified experience, with the live-device review items in `quality-report.md` remaining human-owned.
 
 ## Verdict
 

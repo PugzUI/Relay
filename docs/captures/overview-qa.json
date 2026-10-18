@@ -1,6 +1,6 @@
 {
   "qualified": "isolated real Relay store/broker/browser, not native agent delivery",
-  "runtime": "v26.11.1",
+  "runtime": "v26.12.0",
   "checks": [
     "Disconnected view has unknown summary and no private rows",
     "Authenticated snapshots/panes and initial inspector use real store state; payload stays inert",
@@ -8,7 +8,7 @@
     "Committed event updates preserve keyed node identity/focus; arrow and Enter navigation work",
     "Committed pulses expire rather than becoming fabricated continuous traffic",
     "Filtered keyboard navigation skips disabled collapse controls; slash focuses filter and Escape clears it",
-    "Collapse, filtered expansion, empty search and Expand all preserve expected state",
+    "Collapse, filtered expansion, empty search, filtered-out inspector continuity and Expand all preserve expected state",
     "A real claim renders an orthogonal native SVG assignment link and worker inspector",
     "320/360/390/760/1000/1440px views have no document overflow or clipped toolbar controls; action buttons share 96px width and 36/44px height",
     "200% root text sizing reflows at 320px; shared buttons scale without page overflow",

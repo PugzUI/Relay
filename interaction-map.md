@@ -6,7 +6,7 @@
 | connect | connect/retry control | status changes when the real connection resolves | topology is populated only from the returned snapshot | Enter/Space on focused control |
 | connected | authenticated snapshot | devices, workers, boards, and records render in the two-tier lattice | inspector keeps the current selection or chooses the first real object | Tab through semantic controls |
 | select node | click/tap a device, worker, or board | role edge and selection marker move; inspector updates | topology does not reflow around the inspector | Arrow keys move through visible node order; Enter selects |
-| filter | type in topology filter | only matching branches remain; empty copy appears when there are no matches | clearing the filter restores the prior lattice | input supports normal text editing and Escape clear where provided |
+| filter | type in topology filter | only matching branches remain; empty copy appears when there are no matches; a retained selection is labeled filtered out in the inspector | clearing the filter restores the prior lattice | input supports normal text editing and Escape clear where provided |
 | collapse branch | collapse control on a device/worker branch | branch contents hide and control label changes | selection remains valid if the selected node is still present | Enter/Space on the control |
 | expand large branch | `N more workers · expand` control | hidden worker nodes become visible in the same branch | no fake pagination; all real matching workers are exposed | Enter/Space on the control |
 | committed event | real claim/post succeeds | existing SVG path receives a bounded lime pulse | committed record appears in the records surface and event settles | same action is reachable from the existing control |

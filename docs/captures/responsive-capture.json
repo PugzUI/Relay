@@ -1,0 +1,120 @@
+{
+  "capturedAt": "2026-10-18T15:51:52.648Z",
+  "browser": "Chromium 154.0.8037.97 Arch Linux",
+  "runtime": "v26.12.0",
+  "views": {
+    "topology.png": {
+      "origin": "http://127.0.0.1:4271",
+      "selectedBoard": "bounty",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "document": {
+        "width": 1440,
+        "height": 1446,
+        "horizontalOverflow": false
+      },
+      "topologyItems": 5,
+      "panes": {
+        "inboxRows": 1,
+        "bountiesRows": 1
+      },
+      "connection": "connected",
+      "paneStates": {
+        "inbox": "Ready",
+        "bounties": "Ready"
+      },
+      "pixels": {
+        "width": 1440,
+        "height": 1000
+      }
+    },
+    "topology-medium.png": {
+      "origin": "http://127.0.0.1:4271",
+      "selectedBoard": "bounty",
+      "viewport": {
+        "width": 1000,
+        "height": 900
+      },
+      "document": {
+        "width": 1000,
+        "height": 1491,
+        "horizontalOverflow": false
+      },
+      "topologyItems": 5,
+      "panes": {
+        "inboxRows": 1,
+        "bountiesRows": 1
+      },
+      "connection": "connected",
+      "paneStates": {
+        "inbox": "Ready",
+        "bounties": "Ready"
+      },
+      "pixels": {
+        "width": 1000,
+        "height": 900
+      }
+    },
+    "topology-narrow.png": {
+      "origin": "http://127.0.0.1:4271",
+      "selectedBoard": "bounty",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "document": {
+        "width": 390,
+        "height": 2378,
+        "horizontalOverflow": false
+      },
+      "topologyItems": 5,
+      "panes": {
+        "inboxRows": 1,
+        "bountiesRows": 1
+      },
+      "connection": "connected",
+      "paneStates": {
+        "inbox": "Ready",
+        "bounties": "Ready"
+      },
+      "pixels": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "board-narrow.png": {
+      "origin": "http://127.0.0.1:4271",
+      "selectedBoard": "bounty",
+      "viewport": {
+        "width": 390,
+        "height": 1200
+      },
+      "document": {
+        "width": 390,
+        "height": 2378,
+        "horizontalOverflow": false
+      },
+      "topologyItems": 5,
+      "panes": {
+        "inboxRows": 1,
+        "bountiesRows": 1
+      },
+      "connection": "connected",
+      "paneStates": {
+        "inbox": "Ready",
+        "bounties": "Ready"
+      },
+      "pixels": {
+        "width": 390,
+        "height": 1200
+      }
+    }
+  },
+  "profile": "fresh temporary Chromium profile",
+  "authenticated": true,
+  "runtimeExceptions": 0,
+  "reducedMotion": "emulated and verified",
+  "keyboardFocus": "visible outline verified on a real control"
+}

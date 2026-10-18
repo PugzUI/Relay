@@ -22,6 +22,7 @@ This report covers the Relay overview/topology composition and its existing stat
 | desktop initial | `docs/frames/01-initial-topology.png` | top-down source/record hierarchy, active path, inspector, real committed state |
 | filtered transformation | `docs/frames/02-filtered-transformation.png` | query state, stable inspector, intentional no-match result |
 | mobile composition | `docs/frames/03-mobile-composition.png` | narrow recomposition, two-column metrics, stacked topology and controls |
+| mobile board lane | `docs/frames/04-mobile-board-lane.png` | 390px lower scroll with board tier, inspector, records, and no horizontal overflow |
 | disconnected | `docs/captures/disconnected.png` | explicit disconnected state and recovery affordance |
 | denied | `docs/captures/metadata-denied.png` | explicit permission/error state |
 | cached | `docs/captures/offline-cached.png` | named offline cached state |
@@ -29,7 +30,7 @@ This report covers the Relay overview/topology composition and its existing stat
 | 200% text | `docs/captures/text-200.png` | readable large-text narrow composition |
 | signature recording | `docs/recordings/committed-event.webm` | three-second committed-event pulse captured from the functioning fixture |
 
-The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, filter, selection, keyboard navigation, collapse/expand, refresh, committed-event feedback, reduced motion, and state recovery. The captured evidence is generated from an isolated real Relay store and broker.
+The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, filter, selection, keyboard navigation, collapse/expand, refresh, committed-event feedback, reduced motion, and state recovery. The responsive capture runner also records the 1440px, 1000px, 390px top, and 390px board-lane compositions in `docs/captures/responsive-capture.json`. The captured evidence is generated from an isolated real Relay store and broker.
 
 ## Accessibility review
 
@@ -50,10 +51,10 @@ The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, fil
 
 ## Critical comparison against the design brief
 
-1. **Identity:** Relay's black field, compact typography, square geometry, lime activity, teal board role, gold metadata, and explicit red failure states remain intact.
+1. **Identity:** Relay's black field, compact typography, square geometry, lime activity, teal board role, gold metadata, and explicit red failure states remain intact. Disconnected state now uses the red role marker described by the style bible.
 2. **Distinction:** the two-tier signal lattice and role edge system give the overview a structural identity beyond a conventional list.
 3. **Motion:** the only moving signal represents a real committed event and preserves the existing path.
-4. **Function:** filters, selection, branch collapse/expansion, refresh, inspection, and recovery remain connected to real state.
+4. **Function:** filters, selection, branch collapse/expansion, refresh, inspection, and recovery remain connected to real state. A retained selection is labeled `filtered out` when a query hides it, preserving spatial continuity without implying it remains in the result set.
 5. **Responsive behavior:** desktop, tablet, narrow, and 200% text layouts are intentionally recomposed rather than merely cropped.
 
 ## Human review items

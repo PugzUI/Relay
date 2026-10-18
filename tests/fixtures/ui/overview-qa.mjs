@@ -144,6 +144,7 @@ try {
   passed("Filtered keyboard navigation skips disabled collapse controls; slash focuses filter and Escape clears it");
   await filter("not-a-relay-node");
   assert.equal(await cdp.evaluate("document.getElementById('topology').textContent.includes('No matching nodes')"), true);
+  assert.equal(await cdp.evaluate("document.getElementById('inspector').textContent.includes('filtered out')"), true);
   await screenshot("filtered-empty");
   await filter("");
   assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length"), 0);
