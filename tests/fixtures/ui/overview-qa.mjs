@@ -146,11 +146,15 @@ try {
   assert.equal(await cdp.evaluate("document.getElementById('topology').textContent.includes('No matching nodes')"), true);
   assert.equal(await cdp.evaluate("document.getElementById('inspector').textContent.includes('filtered out')"), true);
   await screenshot("filtered-empty");
+  await filter("verify");
+  assert.equal(await cdp.evaluate("document.querySelectorAll('.device-node').length === 1 && document.querySelectorAll('.worker-node').length === 1"), true);
+  await click(".device-node");
+  assert.equal(await cdp.evaluate("document.querySelector('#inspector .eyebrow').textContent === 'Device'"), true);
   await filter("");
   assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length"), 0);
   await click("#expand-all");
   await wait("document.querySelectorAll('.worker-node').length === 2", "expanded branches");
-  passed("Collapse, filtered expansion, empty search and Expand all preserve expected state");
+  passed("Collapse, filtered expansion, child-matched device inspection, empty search and Expand all preserve expected state");
 
   const lease = relay.claim(session.id, { board: "bounty" });
   assert.ok(lease);
@@ -187,6 +191,17 @@ try {
   await wait("getComputedStyle(document.documentElement).fontSize === '16px'", "restored browser default text size");
   passed("200% root text sizing reflows at 320px; shared buttons scale without page overflow");
   relay.ack(session.id, lease.id, "done");
+
+  await cdp.call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  for (let slot = 2; slot <= 24; slot += 1) relay.register("worker", { slot: String(slot).padStart(3, "0") });
+  await click("#refresh");
+  await wait("document.querySelectorAll('.worker-node').length === 24 && document.querySelector('[data-worker-overflow]')?.getAttribute('aria-expanded') === 'false'", "bounded worker group");
+  await click("[data-worker-overflow]");
+  await wait("document.querySelectorAll('.worker-node').length === 25 && document.querySelector('[data-worker-overflow]')?.getAttribute('aria-expanded') === 'true'", "expanded worker group");
+  assert.equal(await cdp.evaluate("document.querySelector('[data-worker-overflow]').textContent === 'Show fewer workers'"), true);
+  await click("[data-worker-overflow]");
+  await wait("document.querySelectorAll('.worker-node').length === 24 && document.querySelector('[data-worker-overflow]')?.getAttribute('aria-expanded') === 'false'", "folded worker group");
+  passed("Large worker groups expand and fold back without losing access to the overflow control");
 
   await authenticate("metadata");
   await wait("document.getElementById('inbox-status').textContent === 'Denied' && document.getElementById('bounties-status').textContent === 'Denied'", "metadata-only body refusals");

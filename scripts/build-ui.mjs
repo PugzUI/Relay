@@ -4,8 +4,10 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const checking = process.argv.slice(2);
-if (checking.length > 1 || checking.some((arg) => arg !== "--check")) throw new Error("usage: node scripts/build-ui.mjs [--check]");
+const args = process.argv.slice(2);
+if (args.length > 1 || args.some((arg) => !["--check", "--quiet"].includes(arg))) throw new Error("usage: node scripts/build-ui.mjs [--check|--quiet]");
+const checking = args.includes("--check");
+const quiet = args.includes("--quiet");
 const result = await build({
   absWorkingDir: root,
   entryPoints: ["ui/console.mjs"],
@@ -26,7 +28,7 @@ const licenses = await Promise.all(packages.map(async (name) => {
 }));
 const files = [...result.outputFiles.map((file) => ({ path: file.path, text: file.text })),
   { path: resolve(root, "ui/assets/licenses.txt"), text: licenses.join("\n\n") }];
-if (checking.length) {
+if (checking) {
   for (const file of files) {
     const current = await readFile(file.path, "utf8").catch((error) => {
       if (error.code === "ENOENT") return null;
@@ -55,4 +57,4 @@ if (checking.length) {
     }
   }
 }
-console.log(checking.length ? "ui: packaged bundle and licenses match source" : "ui: built local Lit bundle and licenses");
+if (!quiet) console.log(checking ? "ui: packaged bundle and licenses match source" : "ui: built local Lit bundle and licenses");

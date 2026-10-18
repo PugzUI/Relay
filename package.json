@@ -27,7 +27,7 @@
   "scripts": {
     "start": "node src/cli.mjs serve",
     "build:ui": "node scripts/build-ui.mjs",
-    "prepack": "npm run build:ui",
+    "prepack": "node scripts/build-ui.mjs --quiet",
     "check": "node scripts/check.mjs",
     "test": "node --test \"tests/*.test.mjs\""
   },

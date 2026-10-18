@@ -66,7 +66,8 @@ class RelayInspector extends ConsoleElement {
     const matches = (value) => value.toLowerCase().includes(query);
     const filteredOut = Boolean(query && (agent
       ? !matches(`${device?.name ?? ""} ${device?.id ?? agent.device}`) && !matches(`${agent.id} ${agent.caps.join(" ")}`)
-      : board ? !matches(`${board.id} ${board.kind}`) : !matches(`${device.name} ${device.id}`)));
+      : board ? !matches(`${board.id} ${board.kind}`)
+        : !matches(`${device.name} ${device.id}`) && !snapshot.agents.some((worker) => worker.device === device.id && matches(`${worker.id} ${worker.caps.join(" ")}`))));
     let rows;
     if (agent) rows = [["State", agent.state], ["Device", device?.name ?? agent.device], ["Runtime", agent.runtime],
       ["Slot", agent.slot], ["Epoch", agent.epoch], ["Assignments", agent.assignmentCount],
@@ -214,8 +215,10 @@ class RelayTopology extends ConsoleElement {
     const groups = [...snapshot.devices].sort(compareId).map((device) => {
       const all = snapshot.agents.filter((agent) => agent.device === device.id).sort(compareSlot);
       const agents = matches(`${device.name} ${device.id}`) ? all : all.filter((agent) => matches(`${agent.id} ${agent.caps.join(" ")}`));
-      const visibleAgents = query || this.expanded.has(device.id) ? agents : agents.slice(0, MAX_VISIBLE_WORKERS);
-      return { device, agents: visibleAgents, total: agents.length, hidden: Math.max(0, agents.length - visibleAgents.length) };
+      const overflow = !query && agents.length > MAX_VISIBLE_WORKERS;
+      const expanded = overflow && this.expanded.has(device.id);
+      const visibleAgents = query || expanded ? agents : agents.slice(0, MAX_VISIBLE_WORKERS);
+      return { device, agents: visibleAgents, total: agents.length, hidden: Math.max(0, agents.length - visibleAgents.length), overflow, expanded };
     }).filter(({ device, agents }) => matches(`${device.name} ${device.id}`) || agents.length);
     const boards = [...snapshot.boards].sort(compareId).filter((board) => matches(`${board.id} ${board.kind}`));
     if (!groups.length && !boards.length) return html`<div class="topology-empty"><span class="empty-glyph" aria-hidden="true">[ — ]</span><span>${query ? "No matching nodes" : "No devices, workers or boards"}</span></div>`;
@@ -224,14 +227,14 @@ class RelayTopology extends ConsoleElement {
         <svg class="topology-svg" aria-hidden="true">${repeat(this.paths, (path) => path.id, (path) => svg`<path class=${`topology-path path-${path.kind}`} d=${path.d}></path>`)}</svg>
         <div class="topology-columns">
           <div class="device-lane"><h3 class="topology-label">Devices / Workers</h3>
-            ${repeat(groups, ({ device }) => device.id, ({ device, agents, total, hidden }) => html`<section class="topology-branch" data-device=${device.id} aria-label=${device.name}>
+            ${repeat(groups, ({ device }) => device.id, ({ device, agents, total, hidden, overflow, expanded }) => html`<section class="topology-branch" data-device=${device.id} aria-label=${device.name}>
               <div class="device-row"><button class="collapse-control" type="button" data-collapse=${device.id} ?disabled=${Boolean(query)} aria-label=${`${this.isCollapsed(device.id) ? "Expand" : "Collapse"} ${device.name}`} aria-expanded=${String(!this.isCollapsed(device.id))} @click=${() => this.toggle(device.id)}>${this.isCollapsed(device.id) ? "+" : "−"}</button>
                 <button class="node device-node" type="button" data-entity=${device.id} aria-pressed=${String(this.selectedNode === device.id)} @click=${() => signal(this, "select-node", device.id)}>
                   <span class="node-symbol" aria-hidden="true">D</span><span class="node-identity"><span class="node-name">${device.name}</span><span class="node-id">${device.id}</span></span>
                   <span class="node-state">${deviceFresh(device, snapshot) ? "registered" : "stale"}</span>
                   <span class="node-detail">${total} workers · free ${deviceFresh(device, snapshot) && device.free !== null ? count(device.free) : "unknown"} · ${age(device.receivedAt, snapshot.time, device.authority === snapshot.authority, device.stale)}</span>
                 </button></div>
-              ${this.isCollapsed(device.id) ? nothing : html`<ul class="worker-rows">${repeat(agents, (agent) => agent.id, (agent) => this.worker(agent, device))}${hidden ? html`<li class="worker-summary"><button class="quiet-button summary-control" type="button" data-worker-overflow=${device.id} @click=${() => this.toggleWorkers(device.id)}>${hidden} more workers · expand</button></li>` : nothing}${agents.length || hidden ? nothing : html`<li class="branch-empty">No workers</li>`}</ul>`}
+              ${this.isCollapsed(device.id) ? nothing : html`<ul class="worker-rows">${repeat(agents, (agent) => agent.id, (agent) => this.worker(agent, device))}${overflow ? html`<li class="worker-summary"><button class="quiet-button summary-control" type="button" data-worker-overflow=${device.id} aria-expanded=${String(expanded)} @click=${() => this.toggleWorkers(device.id)}>${expanded ? "Show fewer workers" : `${hidden} more workers · expand`}</button></li>` : nothing}${agents.length || hidden ? nothing : html`<li class="branch-empty">No workers</li>`}</ul>`}
             </section>`)}
           </div>
           <div class="board-lane"><h3 class="topology-label">Boards</h3><ul class="board-nodes">${repeat(boards, (board) => board.id, (board) => this.board(board))}</ul></div>

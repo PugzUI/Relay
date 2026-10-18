@@ -10,7 +10,7 @@ This report covers the Relay overview/topology composition and its existing stat
 |---|---|---|
 | repository tests | 245 passed, 0 failed, 0 skipped | `npm test` |
 | packaging, syntax, exports, declarations | passed | `npm run check` |
-| overview browser fixture | 18 passed | `docs/captures/overview-qa.json` |
+| overview browser fixture | 19 passed | `docs/captures/overview-qa.json` |
 | browser runtime exceptions | 0 | fixture metadata |
 | CSP violations | 0 | fixture metadata |
 | strict package artifacts | passed | `npm run check` |
@@ -34,9 +34,11 @@ The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, fil
 
 ## Delivered-bundle validation
 
-- `unzip -t` passed for the delivered archive; a fresh extraction contained 89 files, including all required source, records, frames, captures, and recording assets.
-- The extracted bundle's CLI smoke path passed: setup, worker registration, session join, message send, and stats read all completed from the extracted files.
-- The native approved runtime launched the current source with `npm start -- --no-copy-token` and reported `http://127.0.0.1:4200`; the fixture browser and responsive capture runner then completed against the functioning broker.
+- `unzip -t` passed for the Signal Lattice preview source archive; its fresh extraction contained 240 entries, including the source, design records, frames, captures, and recording assets.
+- The extracted archive installed with `npm ci`, passed `npm run check`, and passed all 19 browser fixture checks with zero runtime exceptions or CSP violations.
+- The extracted source completed setup, worker registration, session join, message send, claim, and acknowledgement using real SQLite state.
+- The native approved runtime launched the current source with `npm start -- --no-copy-token` at `http://127.0.0.1:4200`; the browser fixture also exercised the extracted source against an independent functioning broker.
+- `npm pack --json` now produces valid machine-readable output and a separate 36-file installable npm package.
 - The ordinary restricted scratch runtime cannot launch the extracted `npm start` command because its platform process-identity check reports `unavailable: Process identity cannot be verified on this platform`. This is an environment limitation; the same command launched successfully in the approved native runtime above.
 
 ## Accessibility review

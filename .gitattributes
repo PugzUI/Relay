@@ -1,2 +1,5 @@
 # Preserve the upstream bundle byte-for-byte, including embedded shader strings.
 /tests/renderer-comparison/vendor/pixi.min.mjs -whitespace linguist-vendored
+
+# Preserve compiled Lit output; template literals contain meaningful whitespace.
+/ui/assets/console.mjs -whitespace linguist-generated
