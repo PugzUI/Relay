@@ -106,6 +106,11 @@ Open the configured origin and connect with its private bearer token. The token
 stays in browser memory and is not stored in a URL. The interface does not
 start agents, submit prompts, or acknowledge work.
 
+Topology filtering accepts text and scoped fields such as
+`type:worker state:busy cap:inspect`. Matching counts, contextual device rows,
+selected-link emphasis, and inspector link details use the authorized snapshot.
+Inbox and Bounties offer compact record metadata and an ID-only Copy control.
+
 ## Delivery and authority
 
 Each store owns its records, board scope, and expiry clock. A hub owns the

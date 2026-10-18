@@ -32,7 +32,10 @@
         </div>
         <div class="topology-toolbar">
           <div id="topology-status" class="status-line" role="status">Disconnected</div>
-          <label class="filter-control" for="node-filter"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4"/><path d="m10 10 4 4"/></svg><span class="sr-only">Filter topology</span><input id="node-filter" type="search" placeholder="Filter nodes" maxlength="128" autocomplete="off" spellcheck="false"><kbd>/</kbd></label>
+          <label class="filter-control" for="node-filter"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4"/><path d="m10 10 4 4"/></svg><span class="sr-only">Filter topology</span><input id="node-filter" type="search" placeholder="Filter nodes" maxlength="128" autocomplete="off" spellcheck="false" list="node-filter-options" aria-describedby="filter-help"><kbd>/</kbd></label>
+          <datalist id="node-filter-options"></datalist>
+          <span id="filter-help" class="sr-only">Combine search words with type:worker, type:device, type:board, state:busy, or cap:inspect. Suggestions come from the current topology.</span>
+          <span id="filter-summary" class="filter-summary" aria-live="polite"></span>
           <button id="expand-all" class="quiet-button" type="button" disabled>Expand all</button>
           <button id="refresh" class="quiet-button" type="button" disabled>Refresh</button>
         </div>
@@ -40,7 +43,7 @@
           <relay-topology id="topology" class="topology" aria-label="Relay topology"></relay-topology>
           <aside class="inspector" aria-labelledby="inspector-title"><h2 id="inspector-title" class="topology-label">Inspector</h2><relay-inspector id="inspector"></relay-inspector></aside>
         </div>
-        <div class="topology-footer"><span class="topology-legend"><span class="legend-line" aria-hidden="true"></span>Current link<span class="legend-line legend-pulse" aria-hidden="true"></span>Committed event</span><span>↑ ↓ navigate · ← → collapse / expand</span></div>
+        <div class="topology-footer"><span class="topology-legend"><span class="legend-line" aria-hidden="true"></span>Current link<span class="legend-line legend-selected" aria-hidden="true"></span>Selected link<span class="legend-line legend-pulse" aria-hidden="true"></span>Committed event</span><span>↑ ↓ navigate · ← → collapse / expand</span></div>
       </section>
 
       <section class="boards-section" aria-labelledby="boards-title">

@@ -8,9 +8,9 @@ This report covers the Relay overview/topology composition and its existing stat
 
 | Check | Result | Evidence |
 |---|---|---|
-| repository tests | 245 passed, 0 failed, 0 skipped | `npm test` |
+| repository tests | 246 passed, 0 failed, 0 skipped | `npm test` |
 | packaging, syntax, exports, declarations | passed | `npm run check` |
-| overview browser fixture | 19 passed | `docs/captures/overview-qa.json` |
+| overview browser fixture | 22 passed | `docs/captures/overview-qa.json` |
 | browser runtime exceptions | 0 | fixture metadata |
 | CSP violations | 0 | fixture metadata |
 | strict package artifacts | passed | `npm run check` |
@@ -23,6 +23,7 @@ This report covers the Relay overview/topology composition and its existing stat
 | filtered transformation | `docs/frames/02-filtered-transformation.png` | query state, stable inspector, intentional no-match result |
 | mobile composition | `docs/frames/03-mobile-composition.png` | narrow recomposition, two-column metrics, stacked topology and controls |
 | mobile board lane | `docs/frames/04-mobile-board-lane.png` | 390px lower scroll with board tier, inspector, records, and no horizontal overflow |
+| current narrow record rows | `docs/captures/records-narrow-current.png` | type/ID/state alignment, copying control, payload readability, metadata at 390px |
 | disconnected | `docs/captures/disconnected.png` | explicit disconnected state and recovery affordance |
 | denied | `docs/captures/metadata-denied.png` | explicit permission/error state |
 | cached | `docs/captures/offline-cached.png` | named offline cached state |
@@ -30,9 +31,9 @@ This report covers the Relay overview/topology composition and its existing stat
 | 200% text | `docs/captures/text-200.png` | readable large-text narrow composition |
 | signature recording | `docs/recordings/committed-event.webm` | three-second committed-event pulse captured from the functioning fixture |
 
-The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, filter, selection, keyboard navigation, collapse/expand, refresh, committed-event feedback, reduced motion, and state recovery. The responsive capture runner also records the 1440px, 1000px, 390px top, and 390px board-lane compositions in `docs/captures/responsive-capture.json`. The captured evidence is generated from an isolated real Relay store and broker.
+The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, typed filters with combined terms, match counts, bounded filtered worker expansion, record-ID copying, link highlighting, selection, keyboard navigation, collapse/expand, refresh, committed-event feedback, reduced motion, and state recovery. The responsive capture runner also records the 1440px, 1000px, 390px top, and 390px board-lane compositions in `docs/captures/responsive-capture.json`. The captured evidence is generated from an isolated real Relay store and broker. Earlier style frames remain historical reference captures.
 
-## Delivered-bundle validation
+## Previous preview bundle validation (v0.1.0-preview.1)
 
 - `unzip -t` passed for the Signal Lattice preview source archive; its fresh extraction contained 240 entries, including the source, design records, frames, captures, and recording assets.
 - The extracted archive installed with `npm ci`, passed `npm run check`, and passed all 19 browser fixture checks with zero runtime exceptions or CSP violations.

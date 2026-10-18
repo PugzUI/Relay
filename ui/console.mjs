@@ -1,5 +1,6 @@
 import { LitElement, html, svg, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { filteredTopology } from "./filter.mjs";
 
 const field = { attribute: false };
 const MAX_VISIBLE_WORKERS = 24;
@@ -62,12 +63,11 @@ class RelayInspector extends ConsoleElement {
     const board = snapshot?.boards.find((row) => row.id === this.selection);
     const entity = agent ?? board ?? device;
     if (!entity) return html`<div class="inspector-empty">${snapshot ? "Select a device, worker or board" : "No snapshot"}</div>`;
-    const query = this.query.trim().toLowerCase();
-    const matches = (value) => value.toLowerCase().includes(query);
-    const filteredOut = Boolean(query && (agent
-      ? !matches(`${device?.name ?? ""} ${device?.id ?? agent.device}`) && !matches(`${agent.id} ${agent.caps.join(" ")}`)
-      : board ? !matches(`${board.id} ${board.kind}`)
-        : !matches(`${device.name} ${device.id}`) && !snapshot.agents.some((worker) => worker.device === device.id && matches(`${worker.id} ${worker.caps.join(" ")}`))));
+    const visible = filteredTopology(snapshot, this.query, (entry) => deviceFresh(entry, snapshot) ? "registered" : "stale");
+    const filteredOut = visible.filter.active && !(agent
+      ? visible.groups.some((group) => group.agents.some((worker) => worker.id === agent.id))
+      : board ? visible.boards.some((row) => row.id === board.id)
+        : visible.groups.some((group) => group.device.id === device.id));
     let rows;
     if (agent) rows = [["State", agent.state], ["Device", device?.name ?? agent.device], ["Runtime", agent.runtime],
       ["Slot", agent.slot], ["Epoch", agent.epoch], ["Assignments", agent.assignmentCount],
@@ -81,8 +81,17 @@ class RelayInspector extends ConsoleElement {
       ["Report age", age(device.receivedAt, snapshot.time, device.authority === snapshot.authority, device.stale)],
       ["Created · UTC", timestamp(device.init)]];
     const context = [agent ? "Worker" : board ? "Board" : "Device", this.connection !== "connected" ? "cached" : "", filteredOut ? "filtered out" : ""].filter(Boolean).join(" · ");
+    const links = snapshot.links.filter((link) => link.from === entity.id || link.to === entity.id);
     return html`<div class="inspector-identity"><span class="eyebrow">${context}</span><h3>${entity.id}</h3></div>
-      <dl class="inspector-fields">${rows.map(([label, value]) => html`<div><dt>${label}</dt><dd>${value}</dd></div>`)}</dl>`;
+      <h3 class="inspector-section-label">Details</h3>
+      <dl class="inspector-fields">${rows.map(([label, value]) => html`<div><dt>${label}</dt><dd>${value}</dd></div>`)}</dl>
+      <h3 class="inspector-section-label">Links · ${links.length}</h3>
+      ${links.length ? html`<ul class="inspector-links">${links.slice(0, 6).map((link) => html`<li>
+        <span class="inspector-link-direction">${link.from === entity.id ? "to" : "from"}</span>
+        <span class="inspector-link-target">${link.from === entity.id ? link.to : link.from}</span>
+        <span class="inspector-link-state">${link.kind} · ${link.state}</span>
+      </li>`)}${links.length > 6 ? html`<li class="inspector-link-overflow">${links.length - 6} more links</li>` : nothing}</ul>`
+        : html`<p class="inspector-no-links">No current links</p>`}`;
   }
 }
 
@@ -116,7 +125,7 @@ class RelayTopology extends ConsoleElement {
       const expanded = new Set([...this.expanded].filter((id) => ids.has(id)));
       if (expanded.size !== this.expanded.size) this.expanded = expanded;
     }
-    if (["snapshot", "query", "collapsed", "expanded", "pulses"].some((key) => changed.has(key))) this.measurePaths();
+    if (["snapshot", "query", "collapsed", "expanded", "pulses", "selectedNode", "selectedBoard"].some((key) => changed.has(key))) this.measurePaths();
   }
   toggle(id) {
     if (this.query.trim()) return;
@@ -126,7 +135,6 @@ class RelayTopology extends ConsoleElement {
   }
   expandAll() { this.collapsed = new Set(); }
   toggleWorkers(id) {
-    if (this.query.trim()) return;
     const next = new Set(this.expanded);
     if (next.has(id)) next.delete(id); else next.add(id);
     this.expanded = next;
@@ -180,7 +188,8 @@ class RelayTopology extends ConsoleElement {
         const middle = (x1 + x2) / 2;
         d = `M ${x1} ${y1} H ${middle} V ${y2} H ${x2}`;
       }
-      next.push({ id, d, kind });
+      const selected = this.selectedNode ?? this.selectedBoard;
+      next.push({ id, d, kind, selected: kind !== "pulse" && Boolean(selected && (from === selected || to === selected)) });
     };
     for (const link of this.snapshot.links) add(`link:${link.id}`, link.from, link.to, link.state === "active" ? "current" : "uncertain");
     for (const [index, pulse] of this.pulses.entries()) if (pulse.until > Date.now()) add(`pulse:${index}`, pulse.from, pulse.to, "pulse");
@@ -210,21 +219,20 @@ class RelayTopology extends ConsoleElement {
   render() {
     const snapshot = this.snapshot;
     if (!snapshot) return html`<div class="topology-empty"><span class="empty-glyph" aria-hidden="true">[ — ]</span><span>No snapshot</span></div>`;
-    const query = this.query.trim().toLowerCase();
-    const matches = (value) => value.toLowerCase().includes(query);
-    const groups = [...snapshot.devices].sort(compareId).map((device) => {
-      const all = snapshot.agents.filter((agent) => agent.device === device.id).sort(compareSlot);
-      const agents = matches(`${device.name} ${device.id}`) ? all : all.filter((agent) => matches(`${agent.id} ${agent.caps.join(" ")}`));
-      const overflow = !query && agents.length > MAX_VISIBLE_WORKERS;
+    const query = this.query.trim();
+    const filtered = filteredTopology(snapshot, query, (device) => deviceFresh(device, snapshot) ? "registered" : "stale");
+    const groups = filtered.groups.sort((a, b) => compareId(a.device, b.device)).map(({ device, agents: matching }) => {
+      const agents = matching.sort(compareSlot);
+      const overflow = agents.length > MAX_VISIBLE_WORKERS;
       const expanded = overflow && this.expanded.has(device.id);
-      const visibleAgents = query || expanded ? agents : agents.slice(0, MAX_VISIBLE_WORKERS);
+      const visibleAgents = expanded ? agents : agents.slice(0, MAX_VISIBLE_WORKERS);
       return { device, agents: visibleAgents, total: agents.length, hidden: Math.max(0, agents.length - visibleAgents.length), overflow, expanded };
-    }).filter(({ device, agents }) => matches(`${device.name} ${device.id}`) || agents.length);
-    const boards = [...snapshot.boards].sort(compareId).filter((board) => matches(`${board.id} ${board.kind}`));
+    });
+    const boards = filtered.boards.sort(compareId);
     if (!groups.length && !boards.length) return html`<div class="topology-empty"><span class="empty-glyph" aria-hidden="true">[ — ]</span><span>${query ? "No matching nodes" : "No devices, workers or boards"}</span></div>`;
     return html`<div class="topology-viewport" data-cached=${this.connection !== "connected"} tabindex="0" aria-label="Topology viewport">
       <div class="topology-surface">
-        <svg class="topology-svg" aria-hidden="true">${repeat(this.paths, (path) => path.id, (path) => svg`<path class=${`topology-path path-${path.kind}`} d=${path.d}></path>`)}</svg>
+        <svg class="topology-svg" aria-hidden="true">${repeat(this.paths, (path) => path.id, (path) => svg`<path class=${`topology-path path-${path.kind}${path.selected ? " path-selected" : ""}`} d=${path.d}></path>`)}</svg>
         <div class="topology-columns">
           <div class="device-lane"><h3 class="topology-label">Devices / Workers</h3>
             ${repeat(groups, ({ device }) => device.id, ({ device, agents, total, hidden, overflow, expanded }) => html`<section class="topology-branch" data-device=${device.id} aria-label=${device.name}>

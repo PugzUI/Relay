@@ -169,7 +169,7 @@ try {
         failures.push(`packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`);
       }
       const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts", "src/adapters/package.json",
-        "ui/index.html", "ui/main.mjs", "ui/state.mjs", "ui/style.css", "ui/assets/console.mjs", "ui/assets/licenses.txt",
+        "ui/index.html", "ui/main.mjs", "ui/state.mjs", "ui/filter.mjs", "ui/style.css", "ui/assets/console.mjs", "ui/assets/licenses.txt",
         "src/adapters/index.mjs", "src/adapters/opencode-plugin-core.mjs", "src/adapters/opencode-bridge.mjs",
         ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
       const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));

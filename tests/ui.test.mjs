@@ -17,10 +17,29 @@ import {
   parseSnapshot,
   selectBoard,
 } from "../ui/state.mjs";
+import { compileNodeFilter, filteredTopology, filterSuggestions } from "../ui/filter.mjs";
 
 const device = { id: "dev-1", name: "north", init: 1, authority: "auth-1", receivedAt: 900, stale: true, free: null };
 const agent = { id: "north:worker:prime", device: "dev-1", runtime: "worker", slot: "prime", caps: [], epoch: 1, init: 2, state: "stale", assignmentCount: 0, receivedAt: 800 };
 const board = { id: "bounty", kind: "bounty", device: null, authority: "auth-1", inbox: 1, pending: 2, claimed: 0, terminal: 0, reported: false, receivedAt: null };
+
+test("structured topology filters combine kind, state and capability using only snapshot fields", () => {
+  const sample = { devices: [device], agents: [
+    { ...agent, id: "north:worker:prime", state: "busy", caps: ["inspect"] },
+    { ...agent, id: "north:worker:001", state: "registered", caps: ["verify"] },
+  ], boards: [board] };
+  const worker = filteredTopology(sample, "type:worker state:busy cap:inspect");
+  assert.deepEqual(worker.counts, { devices: 1, workers: 1, boards: 0 });
+  assert.equal(worker.groups[0].agents[0].id, "north:worker:prime");
+  assert.deepEqual(filteredTopology(sample, "type:board").counts, { devices: 0, workers: 0, boards: 1 });
+  assert.deepEqual(filteredTopology(sample, "type:device").counts, { devices: 1, workers: 0, boards: 0 });
+  assert.deepEqual(filteredTopology(sample, "cap:verify").groups[0].agents.map((row) => row.id), ["north:worker:001"]);
+  assert.equal(filteredTopology(sample, "type:worker cap:private").groups.length, 0);
+  assert.equal(filteredTopology(sample, "north").groups[0].agents.length, 2);
+  assert.equal(compileNodeFilter("type:worker cap:inspect").board(board), false);
+  assert.deepEqual(filterSuggestions(sample), ["cap:inspect", "cap:verify", "state:busy", "state:local", "state:registered", "type:board", "type:device", "type:worker"]);
+  assert.deepEqual(filterSuggestions(null), []);
+});
 const scope = "a".repeat(64);
 const filter = "b".repeat(64);
 const canonicalJson = (value) => Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`

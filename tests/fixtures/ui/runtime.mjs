@@ -1,16 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { createContext, runInContext } from "node:vm";
 import * as uiState from "../../../ui/state.mjs";
+import * as uiFilter from "../../../ui/filter.mjs";
 
 class Element extends EventTarget {
   dataset = {};
   children = [];
   textContent = "";
   value = "";
+  query = "";
   disabled = false;
   isConnected = false;
   parentNode = null;
   get firstChild() { return this.children[0] ?? null; }
+  get options() { return this.children; }
   get nextSibling() { return this.parentNode?.children[this.parentNode.children.indexOf(this) + 1] ?? null; }
   append(...children) { for (const child of children) this.insertBefore(child, null); }
   insertBefore(child, anchor) {
@@ -44,12 +47,12 @@ export async function uiRuntime(fetch) {
   const imports = /^import \{[\s\S]*?\} from "\/state.mjs";/;
   if (!imports.test(source)) throw new Error("UI controller import seam changed");
   const context = createContext({
-    ...uiState, clearPrivateUiState: uiState.clearPrivateState,
+    ...uiState, ...uiFilter, clearPrivateUiState: uiState.clearPrivateState,
     document, window: new EventTarget(), location: { origin: "http://127.0.0.1" },
     fetch, URL, AbortController, DOMException, TextDecoder, TextEncoder, Uint8Array, JSON,
     setTimeout, clearTimeout,
   });
-  runInContext(source.replace(imports, "").replace('import "/assets/console.mjs";', ""), context);
+  runInContext(source.replace(imports, "").replace('import "/assets/console.mjs";', "").replace('import { filteredTopology, filterSuggestions } from "/filter.mjs";', ""), context);
   const run = (expression) => runInContext(expression, context);
   return {
     run, document, element: (id) => document.getElementById(id),

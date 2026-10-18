@@ -13,7 +13,7 @@ async function withBuildFixture(run) {
     const assets = join(root, "ui/assets");
     const script = join(root, "scripts/build-ui.mjs");
     await Promise.all([mkdir(dirname(script), { recursive: true }), mkdir(assets, { recursive: true })]);
-    for (const path of ["scripts/build-ui.mjs", "ui/console.mjs", "package.json", "LICENSE"]) {
+    for (const path of ["scripts/build-ui.mjs", "ui/console.mjs", "ui/filter.mjs", "package.json", "LICENSE"]) {
       await writeFile(join(root, path), await readFile(join(project, path), "utf8"));
     }
     await symlink(join(project, "node_modules"), join(root, "node_modules"), "dir");

@@ -16,8 +16,16 @@ The summary rail shows scoped device/worker/board totals and explicitly labeled
 visible busy-worker/active-link counts. A missing snapshot is unknown, not zero.
 Select a device, worker or board for its inspector. Board selection also updates
 the existing independent Inbox and Bounties panes. Filter by node identity or
-capability; matches inside collapsed branches remain accessible. Clear the
-filter to restore collapse preferences. Use Tab/Enter/Space on native controls,
+capability, or combine terms such as `type:worker state:busy cap:inspect`;
+supported types are `device`, `worker`, and `board`. States and capabilities
+come from the authorized snapshot. Suggestions never request additional data.
+The filter shows scoped match counts; device rows remain visible as context
+for matching workers. Filtered worker groups show at most 24 matches until
+explicitly expanded. Matches inside collapsed branches remain accessible.
+Clear the filter to restore collapse preferences. Selected links receive a
+distinct static highlight, and the inspector lists available relationships.
+Inbox and Bounties rows group type, state, ID, timestamp, and permitted metadata;
+Copy ID copies the identifier alone. Use Tab/Enter/Space on native controls,
 up/down and Home/End within topology, left/right to collapse/expand, `/` to focus
 the filter, and Escape to clear it. Expand all and Refresh are read-only actions.
 Disconnect clears credentials, private views, cached pages and pending requests.
@@ -57,10 +65,7 @@ width, visible keyboard focus, reduced-motion styles, and uncaught runtime
 exception count. Metadata contains board and row counts but no pane bodies,
 tokens, session IDs, or local paths. It requires an actual isolated Relay
 broker; it does not mock UI responses. New captures go to an owned temporary
-evidence directory, not the README or tracked image gallery. The retained images and
-The capture fixture (`tests/fixtures/ui/capture.mjs`) regenerates runtime
-metadata per run from a real authenticated session. New captures go to an
-owned temporary evidence directory, not a tracked image gallery.
+evidence directory, not the README or tracked image gallery.
 Wide and narrow layouts were visually reviewed. Native browser checks also
 exercised metadata-only and work-only permissions, credential revocation,
 an empty store, actual broker stop/restart, and HTML-like text rendered inertly.

@@ -93,13 +93,13 @@ test("unchanged pane refreshes retain their record and payload nodes", async () 
   try {
     ui.run(`state.selectedBoard='bounty';state.connection='connected';state.inbox.page={items:[{id:'m1',state:'posted',seq:1,init:1,data:{msg:'Keep selection'}}],visible:1,total:1,complete:true,pruned:0};renderPane('inbox')`);
     const row = ui.element("inbox-rows").firstChild;
-    const payload = row.children[2];
+    const payload = row.children[1];
     ui.run("state.inbox.loading=true;renderPane('inbox');state.inbox.loading=false;renderPane('inbox')");
     assert.equal(ui.element("inbox-rows").firstChild, row);
-    assert.equal(row.children[2], payload);
+    assert.equal(row.children[1], payload);
     ui.run("state.inbox.page.items[0].data.msg='Changed';renderPane('inbox')");
     assert.equal(ui.element("inbox-rows").firstChild, row);
-    assert.equal(row.children[2].textContent, "Changed");
+    assert.equal(row.children[1].textContent, "Changed");
     ui.run("state.inbox.page=null;renderPane('inbox')");
     assert.equal(ui.element("inbox-rows").children.length, 0);
   } finally { await ui.close(); }

@@ -12,6 +12,7 @@ import {
   selectBoard,
 } from "/state.mjs";
 import "/assets/console.mjs";
+import { filteredTopology, filterSuggestions } from "/filter.mjs";
 
 const PAGE_SIZE = 50;
 const MAX_RESPONSE_BYTES = 1_048_576;
@@ -130,6 +131,7 @@ function clearPrivateState() {
   metaNode.textContent = "";
   metaNode.title = "";
   byId("node-filter").value = "";
+  byId("node-filter-options").replaceChildren();
   topologyNode.query = "";
   renderViews();
   boardPicker.replaceChildren();
@@ -241,6 +243,19 @@ function renderViews() {
   topologyNode.pulses = state.pulses;
   byId("inspector").selection = state.selectedNode;
   byId("inspector").query = topologyNode.query;
+  const query = topologyNode.query;
+  const summary = byId("filter-summary");
+  if (!query.trim() || !snapshot) summary.textContent = "";
+  else {
+    const matches = filteredTopology(snapshot, query, (device) => deviceStatus(device, snapshot)).counts;
+    const quantity = (amount, label) => `${amount} ${label}${amount === 1 ? "" : "s"}`;
+    summary.textContent = [quantity(matches.devices, "device"), quantity(matches.workers, "worker"), quantity(matches.boards, "board")].join(" · ");
+  }
+}
+
+function deviceStatus(device, snapshot) {
+  return device.authority === snapshot.authority || (!device.stale && device.receivedAt !== null
+    && device.receivedAt <= snapshot.time && snapshot.time - device.receivedAt <= 30_000) ? "registered" : "stale";
 }
 
 function drawTopology(snapshot = state.snapshot) {
@@ -249,6 +264,15 @@ function drawTopology(snapshot = state.snapshot) {
   if (state.selectedNode && !entities.some((row) => row.id === state.selectedNode)) state.selectedNode = null;
   renderViews();
   if (!snapshot) return;
+  const suggestions = byId("node-filter-options");
+  const options = filterSuggestions(snapshot, (device) => deviceStatus(device, snapshot));
+  if (JSON.stringify(options) !== JSON.stringify([...suggestions.options].map((option) => option.value))) {
+    suggestions.replaceChildren(...options.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      return option;
+    }));
+  }
   const ids = snapshot.boards.map((board) => board.id);
   if (JSON.stringify(ids) !== JSON.stringify([...boardPicker.children].map((option) => option.value))) {
     boardPicker.replaceChildren();
@@ -355,9 +379,31 @@ function renderPane(name) {
         : `seq ${row.seq} · ${row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none"}${row.series ? ` · series ${row.series}` : ""} · ${timeLabel(row.init)}`;
       const signature = JSON.stringify([row.id, row.state, text, metadata]);
       if (recordSignatures.get(item) !== signature) {
-        item.replaceChildren(node("span", "record-id", row.id), node("span", "record-state", row.state));
+        const header = node("div", "record-head");
+        const copy = node("button", "record-copy", "Copy");
+        copy.type = "button";
+        copy.setAttribute("aria-label", `Copy record ID ${row.id}`);
+        copy.addEventListener("click", async () => {
+          try {
+            if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+            await navigator.clipboard.writeText(row.id);
+            if (item.dataset.mid === row.id) copy.textContent = "Copied";
+          } catch {
+            if (item.dataset.mid === row.id) copy.textContent = "Unavailable";
+          }
+        });
+        const current = node("span", "record-state", row.state);
+        current.dataset.state = row.state;
+        header.append(node("span", "record-kind", name === "inbox" ? "MSG" : "WORK"), node("span", "record-id", row.id), current, copy);
+        item.replaceChildren(header);
         if (text !== undefined) item.append(node("pre", "record-text", text));
-        item.append(node("span", "record-meta", metadata));
+        const meta = node("div", "record-meta");
+        meta.append(node("span", "record-seq", `seq ${row.seq}`), node("span", "record-time", timeLabel(row.init)));
+        if (name === "bounties") {
+          meta.append(node("span", "record-needs", row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none"));
+          if (row.series) meta.append(node("span", "record-series", `series ${row.series}`));
+        }
+        item.append(meta);
         recordSignatures.set(item, signature);
       }
       retained.add(item);
@@ -677,6 +723,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && event.target === filter) {
     filter.value = "";
     topologyNode.query = "";
+    renderViews();
   } else if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target?.closest?.("input, select, textarea, [contenteditable]")) {
     event.preventDefault();
     filter.focus();

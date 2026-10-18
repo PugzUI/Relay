@@ -49,8 +49,8 @@ async function filter(value) {
   await cdp.evaluate(`(() => {const input=document.getElementById('node-filter');input.value=${JSON.stringify(value)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await cdp.evaluate("document.getElementById('topology').updateComplete");
 }
-async function screenshot(name) {
-  await cdp.evaluate("document.activeElement?.blur(); window.scrollTo(0,0); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+async function screenshot(name, target = null) {
+  await cdp.evaluate(`(() => { document.activeElement?.blur(); ${target ? `document.querySelector(${JSON.stringify(target)})?.scrollIntoView({block:"start"})` : "window.scrollTo(0,0)"}; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
   const image = await cdp.call("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
   const path = join(evidence, `${name}.png`);
   await writeFile(path, Buffer.from(image.data, "base64"), { mode: 0o600, flag: "wx" });
@@ -105,7 +105,13 @@ try {
   assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length"), 2);
   assert.equal(await cdp.evaluate("document.getElementById('inspector').selection"), "bounty");
   assert.equal(await cdp.evaluate("document.querySelector('#inbox-rows img') === null && document.querySelector('#inbox-rows pre').textContent.includes('<img')"), true);
+  assert.equal(await cdp.evaluate("document.querySelector('#inbox-rows .record-kind').textContent === 'MSG' && document.querySelector('#bounties-rows .record-kind').textContent === 'WORK' && document.querySelector('#inbox-rows .record-time').textContent.includes('T')"), true);
+  assert.equal(await cdp.evaluate("document.querySelector('#node-filter-options option[value=\"cap:verify\"]') !== null"), true);
   passed("Authenticated snapshots/panes and initial inspector use real store state; payload stays inert");
+  await cdp.evaluate("window.qaCopiedId=null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value)=>{window.qaCopiedId=value}}})");
+  await click("#inbox-rows .record-copy");
+  await wait("window.qaCopiedId === document.querySelector('#inbox-rows .record-id').textContent && document.querySelector('#inbox-rows .record-copy').textContent === 'Copied'", "exact record ID copied");
+  passed("Record headers identify kind, state and time; Copy copies only the exact record ID");
 
   await cdp.evaluate("window.qaInboxRow=document.querySelector('#inbox-rows > li');window.qaQuietTime=document.getElementById('topology').snapshot.time;const range=document.createRange();range.selectNodeContents(window.qaInboxRow.querySelector('pre'));const selection=getSelection();selection.removeAllRanges();selection.addRange(range);window.qaSelectedText=selection.toString();");
   await wait("document.getElementById('topology').snapshot.time > window.qaQuietTime", "quiet snapshot reconciliation", 15_000);
@@ -150,6 +156,13 @@ try {
   assert.equal(await cdp.evaluate("document.querySelectorAll('.device-node').length === 1 && document.querySelectorAll('.worker-node').length === 1"), true);
   await click(".device-node");
   assert.equal(await cdp.evaluate("document.querySelector('#inspector .eyebrow').textContent === 'Device'"), true);
+  await filter("type:worker state:registered cap:verify");
+  assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length === 1 && document.querySelectorAll('.board-node').length === 0 && document.getElementById('filter-summary').textContent.includes('1 worker')"), true);
+  await filter("type:board");
+  assert.equal(await cdp.evaluate("document.querySelectorAll('.device-node,.worker-node').length === 0 && document.querySelectorAll('.board-node').length === 2 && document.querySelector('#inspector .eyebrow').textContent.includes('filtered out')"), true);
+  await filter("type:device");
+  assert.equal(await cdp.evaluate("document.querySelectorAll('.device-node').length === 1 && document.querySelectorAll('.worker-node').length === 0 && document.querySelectorAll('.board-node').length === 0"), true);
+  passed("Combined typed filters keep contextual devices, scoped counts, and filtered inspector status consistent");
   await filter("");
   assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length"), 0);
   await click("#expand-all");
@@ -161,8 +174,9 @@ try {
   await wait("document.querySelector('.path-current') instanceof SVGPathElement && document.getElementById('topology').snapshot.agents.some(a=>a.assignmentCount === 1)", "real active assignment link");
   assert.equal(await cdp.evaluate("document.querySelector('.path-current').getAttribute('d').includes(' H ') && document.querySelector('.path-current').getAttribute('d').includes(' V ')"), true);
   await click(".worker-node");
+  await wait("document.querySelector('.path-current.path-selected') !== null && document.querySelector('#inspector .inspector-links .inspector-link-target') !== null", "highlighted selected relationship");
   await screenshot("overview-wide");
-  passed("A real claim renders an orthogonal native SVG assignment link and worker inspector");
+  passed("A real claim renders an orthogonal selected SVG link and grouped worker inspector");
   for (const width of [1440, 1000, 760, 390, 360, 320]) {
     await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: width < 761 });
     await cdp.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");
@@ -173,7 +187,10 @@ try {
     const sizes = await cdp.evaluate("[...document.querySelectorAll('#disconnect,#refresh,#expand-all,.pager button')].map(e=>{const r=e.getBoundingClientRect();return [r.width,r.height]})");
     assert.equal(sizes.length, 7);
     assert.ok(sizes.every(([w, h]) => w === 96 && h === (width <= 760 ? 44 : 36)));
-    if (width === 390) await screenshot("overview-narrow");
+    if (width === 390) {
+      await screenshot("overview-narrow");
+      await screenshot("records-narrow", ".panes");
+    }
   }
   await cdp.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   assert.equal(await cdp.evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches"), true);
@@ -202,6 +219,12 @@ try {
   await click("[data-worker-overflow]");
   await wait("document.querySelectorAll('.worker-node').length === 24 && document.querySelector('[data-worker-overflow]')?.getAttribute('aria-expanded') === 'false'", "folded worker group");
   passed("Large worker groups expand and fold back without losing access to the overflow control");
+  await filter("type:worker");
+  assert.equal(await cdp.evaluate("document.querySelectorAll('.worker-node').length === 24 && document.querySelector('[data-worker-overflow]') !== null && document.getElementById('filter-summary').textContent.includes('25 workers')"), true);
+  await click("[data-worker-overflow]");
+  await wait("document.querySelectorAll('.worker-node').length === 25", "expanded filtered worker group");
+  await filter("");
+  passed("Large structured query matches remain bounded and can be expanded explicitly");
 
   await authenticate("metadata");
   await wait("document.getElementById('inbox-status').textContent === 'Denied' && document.getElementById('bounties-status').textContent === 'Denied'", "metadata-only body refusals");
@@ -230,7 +253,7 @@ try {
   await writeFile(registryPath, JSON.stringify({ version: 1, credentials: registry.credentials.filter((row) => row.principal !== "overview-full") }), { mode: 0o600 });
   await click("#refresh");
   await wait("document.getElementById('connection').textContent === 'Authentication required' && document.getElementById('topology').snapshot === null", "credential revocation");
-  assert.equal(await cdp.evaluate("document.querySelectorAll('#inbox-rows > li,#bounties-rows > li').length === 0 && document.getElementById('inspector').snapshot === null && document.getElementById('node-filter').value === '' && [...document.querySelectorAll('#overview dd')].every(e=>e.textContent === '—')"), true);
+  assert.equal(await cdp.evaluate("document.querySelectorAll('#inbox-rows > li,#bounties-rows > li').length === 0 && document.getElementById('inspector').snapshot === null && document.getElementById('node-filter').value === '' && document.getElementById('node-filter-options').options.length === 0 && [...document.querySelectorAll('#overview dd')].every(e=>e.textContent === '—')"), true);
   passed("Real credential revocation clears summary, topology, inspector, filter and private pane caches");
 
   await authenticate("work");
