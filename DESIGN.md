@@ -62,8 +62,8 @@ Standards: [WCAG 2.2 Contrast (Minimum)](https://www.w3.org/WAI/WCAG22/Understan
 
 Two family definitions only:
 
-- `f-sans`: `"Geist", "Noto Sans", "Segoe UI", system-ui, sans-serif`.
-- `f-mono`: `"KodeNFM", "Geist Mono", ui-monospace, "Cascadia Code", monospace`.
+- `f-sans`: `"IBM Plex Sans", "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif`.
+- `f-mono`: `"IosevkaTerm NFM", "CommitMono Nerd Font", "IBM Plex Mono", "SF Mono", "Consolas", ui-monospace, monospace`.
 - `f-legend` aliases `f-mono` for operational legends.
 
 Local font availability may select a fallback. A declared family is not proof that the preferred face is installed. No private font or private-use glyph is required to understand an icon.
