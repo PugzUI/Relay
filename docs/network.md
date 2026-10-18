@@ -4,15 +4,19 @@ Network mode is optional. Local `setup` and `open` start no listener. Only
 `serve` binds a listener, after it validates the selected root, role, config,
 credentials, transport, and port. Bare CLI `serve` / `npm start` first prepares
 an ignored private `.local/` host profile; explicit root/config pairs use only
-the supplied existing profile. Local defaults enable no hub, pool or native
-delivery and never overwrite existing credentials. Default application port is
-`4200`; an occupied port fails rather than selecting a fallback.
+the supplied existing profile. Default startup binds IPv4 `0.0.0.0:4200` in
+`tailnet` mode, accepting only loopback and tailnet-range sources arriving at
+the Tailscale IPv4 address; all other peers get `403`. An existing generated
+loopback profile is upgraded atomically without rotating its viewer credential
+or replacing its store; customized existing profiles are kept. Defaults enable
+no hub, pool, or native delivery. An occupied port fails rather than falling back.
 
 | Mode | Listener | Required boundary |
 |---|---|---|
 | `local` | HTTP on literal loopback | Credentials still required |
 | `lan` | HTTPS on one explicit local unicast address | Certificate/key, client trust, exact peer allowlist, Relay credentials |
 | `tailscale` | HTTP on literal loopback | Separately managed private HTTPS proxy and access policy, plus Relay credentials |
+| `tailnet` | HTTP on `0.0.0.0` (IPv4 only) | Source peer in `100.64.0.0/10`, local Tailscale-range destination, Tailscale ACLs and Relay credentials; loopback also allowed |
 
 Remote CLI operations use `--url` and `--token-file`; tokens are never argv or
 URL data. `--ca-file` adds a per-client trust root. Plain HTTP requires explicit
@@ -20,6 +24,14 @@ URL data. `--ca-file` adds a per-client trust root. Plain HTTP requires explicit
 Redirects are refused so authorization is not forwarded to another origin.
 The broker keeps the database and authoritative expiry clock on its own local
 disk.
+
+Direct tailnet mode is intended for a browser using `http://<tailscale-ip>:4200`
+within a tailnet. It does not grant trust based on tailnet membership: the viewer
+bearer token is still mandatory, and ACLs still apply. Binding to all IPv4
+interfaces does not authorize ordinary LAN access, but ensure Tailscale routing
+and access controls are correctly configured. For HTTPS clients or stronger
+transport policy, prefer the existing loopback `tailscale` mode behind
+`tailscale serve` instead. Non-loopback HTTP CLI clients remain unsupported.
 
 The operator config and credential registry use strict schemas. Credentials
 are separate per principal and store only token digests. Worker registration,

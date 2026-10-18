@@ -394,11 +394,14 @@ fail before opening a socket. The exact top-level object is:
 }
 ```
 
-`role` is `host|hub`; `mode` is `local|lan|tailscale`. `listen.host` is a
-literal IP address, never a hostname: local and tailscale require literal
+`role` is `host|hub`; `mode` is `local|lan|tailscale|tailnet`. `listen.host`
+is a literal IP address, never a hostname: local and tailscale require literal
 loopback; LAN requires one local unicast address and explicit exact peer-IP
-allowlist. `listen.port` defaults to 4200; alternate ports are only for
-isolated qualification. `tls` is `null` for local/tailscale and
+allowlist. Host-only `tailnet` requires IPv4 `0.0.0.0`, allowing only loopback
+and `100.64.0.0/10` peers whose destination is also in the tailnet IPv4 range.
+This is a peer-address filter, not a substitute for Tailscale ACLs or Relay
+viewer authentication. `listen.port` defaults to 4200; alternate ports are only for
+isolated qualification. `tls` is `null` for local/tailscale/tailnet and
 `{certFile,keyFile}` for LAN. TLS private material is private-file validated;
 client trust is configured by `ClientOptions.caFile`. `allowedPeers` is
 required and nonempty in LAN mode; it is an exact
@@ -1528,7 +1531,7 @@ value or URL component.
 | stats / audit | `relay stats --root PATH`; `relay audit --root PATH [--after CURSOR]`; audit is bounded and payload-free. |
 | snapshot | `relay snapshot --root PATH [--device ID] [--limit N] [--after CURSOR]`; read-only, scoped topology JSON; creates no state. |
 | purge | `relay purge --root PATH --before TIME [--dry]`; local administration only. |
-| serve | `relay serve [--root PATH --config FILE] [--no-copy-token]`; explicit foreground listener; local administration only. Without either selector, initialize/reuse the private local host profile at `.local/store` and `.local/relay.json`, with a read-only viewer token file, loopback port 4200, no pool, hub or native delivery. After binding, human-readable local startup attempts a bounded Wayland clipboard copy via optional `wl-copy`, with the token only on stdin and a sensitive-content hint. Failure leaves the broker running and the token file intact. `--no-copy-token`, `--json` and custom profiles skip clipboard access. Custom selectors must be supplied together and never trigger provisioning. SDK `serve()` still requires an already initialized store and explicit config. |
+| serve | `relay serve [--root PATH --config FILE] [--no-copy-token]`; explicit foreground listener; local administration only. Without either selector, initialize/reuse the private local host profile at `.local/store` and `.local/relay.json`, with a read-only viewer token file, `0.0.0.0:4200` tailnet-filtered HTTP listener, and no pool, hub or native delivery. Exactly generated legacy loopback profiles upgrade atomically while preserving their viewer credentials and store; custom profiles remain unchanged. After binding, human-readable local startup prints the local URL and available Tailscale URL and attempts a bounded Wayland clipboard copy via optional `wl-copy`, with the token only on stdin and a sensitive-content hint. Failure leaves the broker running and the token file intact. `--no-copy-token`, `--json` and custom profiles skip clipboard access. Custom selectors must be supplied together and never trigger provisioning. SDK `serve()` still requires an already initialized store and explicit config. |
 
 `send`/`post` read at most 65,536 encoded UTF-8 bytes plus the bounded newline
 framing, reject multiple JSON values/trailing input, and never interpolate

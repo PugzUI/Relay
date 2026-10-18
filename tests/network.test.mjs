@@ -7,7 +7,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client, connect, createFixedClient, invokeClient } from "../src/client.mjs";
-import { serve } from "../src/broker.mjs";
+import { serve, healthyModePeer } from "../src/broker.mjs";
 import { Fault } from "../src/fault.mjs";
 import { readConfig, parseJsonStrict } from "../src/config.mjs";
 import { setup } from "../src/relay.mjs";
@@ -158,6 +158,29 @@ test("config accepts an explicit local profile and rejects ambiguous bindings", 
     await privateFile(configFile, JSON.stringify(base));
     await assert.rejects(readConfig(configFile), (error) => error instanceof Fault && error.code === "input");
   });
+});
+
+test("direct tailnet listener binds wildcard but rejects LAN peers", async () => {
+  await withTempDir(async (root) => {
+    const credentialsFile = join(root, "credentials.json");
+    const configFile = join(root, "relay.json");
+    await privateFile(credentialsFile, JSON.stringify({ version: 1, credentials: [] }));
+    const base = { version: 1, role: "host", mode: "tailnet", listen: { host: "0.0.0.0", port: 4200 }, tls: null, allowedPeers: [], credentialsFile: "./credentials.json", hub: null, pool: null, views: [] };
+    await privateFile(configFile, JSON.stringify(base));
+    assert.equal((await readConfig(configFile)).listen.host, "0.0.0.0");
+    await privateFile(configFile, JSON.stringify({ ...base, listen: { ...base.listen, host: "127.0.0.1" } }));
+    await assert.rejects(readConfig(configFile), { code: "input" });
+    await privateFile(configFile, JSON.stringify({ ...base, role: "hub" }));
+    await assert.rejects(readConfig(configFile), { code: "input" });
+  });
+  assert.equal(healthyModePeer("tailnet", [], "127.0.0.1", "127.0.0.1"), true);
+  assert.equal(healthyModePeer("tailnet", [], "100.64.0.1", "100.127.255.254"), true);
+  assert.equal(healthyModePeer("tailnet", [], "::ffff:100.67.69.100", "100.67.69.100"), true);
+  for (const peer of ["192.168.1.2", "10.0.0.4", "172.16.1.4", "8.8.8.8", "100.63.255.255", "100.128.0.1", "::1", undefined]) {
+    assert.equal(healthyModePeer("tailnet", [], peer, "100.67.69.100"), false, String(peer));
+  }
+  assert.equal(healthyModePeer("tailnet", [], "100.67.69.101", "192.168.1.5"), false);
+  assert.equal(healthyModePeer("lan", ["192.168.1.2"], "192.168.1.2", "192.168.1.5"), true);
 });
 
 test("config v2 freezes delivery selection and leaves v1 delivery disabled", async () => {

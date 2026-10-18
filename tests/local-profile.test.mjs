@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,8 @@ test("local startup creates a private real profile and reuses its identity and c
     const profile = await config.prepareLocalProfile(root, file);
     const selected = await config.readConfig(file);
     assert.equal(selected.role, "host");
-    assert.equal(selected.mode, "local");
-    assert.deepEqual(selected.listen, { host: "127.0.0.1", port: 4200 });
+    assert.equal(selected.mode, "tailnet");
+    assert.deepEqual(selected.listen, { host: "0.0.0.0", port: 4200 });
     assert.equal(selected.hub, null);
     assert.equal(selected.pool, null);
     assert.equal(selected.delivery.enabled, false);
@@ -48,6 +48,43 @@ test("local startup creates a private real profile and reuses its identity and c
     assert.equal(before.every((value, i) => value.equals(after[i])), true);
     const reopened = open({ root, readOnly: true });
     try { assert.deepEqual(reopened.device, device); } finally { reopened.close(); }
+  });
+});
+
+test("generated loopback profile upgrades to tailnet without rotating viewer credentials or store", async () => {
+  await withTempDir(async (parent) => {
+    const { root, file } = paths(parent);
+    const profile = await config.prepareLocalProfile(root, file);
+    const tokenBefore = await readFile(profile.tokenFile);
+    const registryPath = join(parent, ".local/credentials.json");
+    const registryBefore = await readFile(registryPath);
+    const before = open({ root, readOnly: true });
+    const device = before.device;
+    before.close();
+    const legacy = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4200 },
+      tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+    await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
+    await config.prepareLocalProfile(root, file);
+    assert.equal((await config.readConfig(file)).mode, "tailnet");
+    assert.deepEqual((await config.readConfig(file)).listen, { host: "0.0.0.0", port: 4200 });
+    assert.equal((await readFile(profile.tokenFile)).equals(tokenBefore), true);
+    assert.equal((await readFile(registryPath)).equals(registryBefore), true);
+    const after = open({ root, readOnly: true });
+    try { assert.deepEqual(after.device, device); } finally { after.close(); }
+    assert.equal((await stat(file)).mode & 0o077, 0);
+  });
+});
+
+test("custom existing loopback profile stays unchanged", async () => {
+  await withTempDir(async (parent) => {
+    const { root, file } = paths(parent);
+    await config.prepareLocalProfile(root, file);
+    const legacy = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4211 },
+      tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+    await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
+    const original = await readFile(file);
+    await config.prepareLocalProfile(root, file);
+    assert.equal((await readFile(file)).equals(original), true);
   });
 });
 

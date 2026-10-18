@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { spawn } from "node:child_process";
+import { networkInterfaces } from "node:os";
 import { parseStrictJsonText } from "./strict-json.mjs";
 
 const route = {
@@ -132,7 +133,7 @@ function required(flags, key) {
   if (!flags[key]) throw new CliInputError(`--${key} is required`);
 }
 
-const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list pending stats audit snapshot purge migrate serve delivery-status delivery-reconcile\n\nLocal routes use --root PATH. Bare serve (npm start) initializes/reuses the private .local/ host profile on loopback port 4200 and prints its URL and viewer token-file path. Local startup also attempts a Wayland clipboard copy using optional wl-copy; --no-copy-token or --json skips copying. Custom serve profiles require both --root PATH and --config FILE and never touch the clipboard. Remote routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP requires --mode local and a literal loopback URL. Use delivery-status --root PATH --config FILE for read-only redacted diagnostics. Reconciliation requires --confirm and --reason-code operator-confirmed while the broker is stopped. Migration requires an unused backup path; rollback to v2 requires --config FILE with delivery disabled. Use --json for exact JSON output.\n`;
+const helpText = `Relay\n\nCommands: setup register enroll join resume renew leave send post claim touch ack release get list pending stats audit snapshot purge migrate serve delivery-status delivery-reconcile\n\nLocal routes use --root PATH. Bare serve (npm start) initializes/reuses the private .local/ host profile on 0.0.0.0:4200; its HTTP listener allows loopback and Tailscale IPv4 peers only and requires a viewer token. Existing generated loopback profiles are upgraded without rotating credentials. Local startup also attempts a Wayland clipboard copy using optional wl-copy; --no-copy-token or --json skips copying. Custom serve profiles require both --root PATH and --config FILE and never touch the clipboard. Remote CLI routes use --url HTTPS_ORIGIN --token-file FILE, with optional --ca-file FILE. HTTP CLI clients require --mode local and a literal loopback URL. Use delivery-status --root PATH --config FILE for read-only redacted diagnostics. Reconciliation requires --confirm and --reason-code operator-confirmed while the broker is stopped. Migration requires an unused backup path; rollback to v2 requires --config FILE with delivery disabled. Use --json for exact JSON output.\n`;
 
 export async function readEnvelope(stream = process.stdin) {
   const chunks = [];
@@ -309,9 +310,12 @@ async function serve(api, flags, io, profile) {
   try {
     const address = broker.address;
     const host = address.family === "IPv6" ? `[${address.address}]` : address.address;
-    const info = { address, ...(profile ? { url: `http://${host}:${address.port}`, tokenFile: profile.tokenFile } : {}) };
+    const localUrl = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${address.port}`;
+    const tailscaleIp = networkInterfaces().tailscale0?.find((entry) => entry.family === "IPv4" && !entry.internal)?.address;
+    const tailnetUrl = profile && host === "0.0.0.0" && tailscaleIp ? `http://${tailscaleIp}:${address.port}` : null;
+    const info = { address, ...(profile ? { url: localUrl, tokenFile: profile.tokenFile, ...(tailnetUrl ? { tailnetUrl } : {}) } : {}) };
     if (flags.json) io.stdout.write(`${JSON.stringify(info)}\n`);
-    else io.stdout.write(`${profile ? `Relay: ${info.url}\nViewer token file: ${safeText(profile.tokenFile)}` : `Listening: ${host}:${address.port}`}\n`);
+    else io.stdout.write(`${profile ? `Relay: ${info.url}${tailnetUrl ? `\nTailscale: ${tailnetUrl}` : ""}\nViewer token file: ${safeText(profile.tokenFile)}` : `Listening: ${host}:${address.port}`}\n`);
     if (profile && !flags.json && !flags["no-copy-token"]) {
       const copied = await copyViewerToken(profile.tokenFile, { signal: clipboardController.signal });
       if (!clipboardController.signal.aborted) io.stdout.write(copied

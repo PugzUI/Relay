@@ -78,11 +78,19 @@ Start the local dashboard:
 npm start
 ```
 
-On first launch, the existing CLI creates a private local host profile under
-`.local/`: real persisted storage, loopback HTTP on `127.0.0.1:4200`, and a
-read-only viewer credential. It starts no agents and seeds no traffic. Later
-launches reuse the same store and credential. The URL and private token-file
-location are printed, never the token itself. Stop it with Ctrl+C.
+On first launch, the CLI creates a private host profile under `.local/`, with
+real persisted storage, an HTTP listener bound to `0.0.0.0:4200`, and a
+read-only viewer credential. Requests are accepted only from loopback or a
+Tailscale IPv4 peer reaching the host's Tailscale address. It starts no agents
+and seeds no traffic. Existing generated loopback profiles upgrade on startup
+without changing their store or viewer credential; custom profiles are retained.
+The local URL, available Tailscale URL, and private token-file location are
+printed, never the token itself. Stop it with Ctrl+C.
+
+Open `http://<your-tailscale-ip>:4200/` from another device on your tailnet and
+paste the viewer token into **Bearer token**. Your tailnet ACLs must allow this
+device and port. Direct HTTP must stay within Tailscale's encrypted network;
+for a normal LAN or a public network, use the documented TLS profile instead.
 
 On a Wayland desktop with `wl-copy` installed, startup also copies the viewer
 token to the clipboard: paste into **Bearer token** and click **Connect**.

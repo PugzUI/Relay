@@ -38,10 +38,16 @@ const responseFault = (error) => {
   const context = known.context && Object.fromEntries(Object.entries(known.context).filter(([k]) => ["id", "mid", "sid", "lease", "retryAfterMs"].includes(k)));
   return { code: known.code, message: known.message.slice(0, 256), ...(context && Object.keys(context).length ? { context } : {}) };
 };
-const healthyModePeer = (mode, allowed, address) => {
-  if (mode !== "lan") return true;
-  let peer = address?.startsWith("::ffff:") ? address.slice(7) : address;
-  return allowed.includes(peer);
+export const healthyModePeer = (mode, allowed, address, localAddress) => {
+  if (mode !== "lan" && mode !== "tailnet") return true;
+  const peer = address?.startsWith("::ffff:") ? address.slice(7) : address;
+  if (mode === "lan") return allowed.includes(peer);
+  if (peer === "127.0.0.1") return localAddress === "127.0.0.1";
+  const parts = typeof peer === "string" ? peer.split(".").map(Number) : [];
+  const localParts = typeof localAddress === "string" ? localAddress.split(".").map(Number) : [];
+  return parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127
+    && localParts.length === 4 && localParts[0] === 100 && localParts[1] >= 64 && localParts[1] <= 127;
 };
 const randomRid = () => randomBytes(18).toString("base64url");
 
@@ -419,7 +425,7 @@ async function callRoute(state, req, res, deadline, body, principal) {
 
 async function handle(state, req, res, deadline, onStreamStart) {
   if (state.closed) fail("unavailable", "Broker is closing");
-  if (!healthyModePeer(state.config.mode, state.config.allowedPeers, req.socket.remoteAddress)) fail("denied");
+  if (!healthyModePeer(state.config.mode, state.config.allowedPeers, req.socket.remoteAddress, req.socket.localAddress)) fail("denied");
   const seen = new Set();
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
     const name = req.rawHeaders[i].toLowerCase();

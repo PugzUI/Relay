@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { link, lstat, mkdir, mkdtemp, open as openFile, rm, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open as openFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -80,15 +80,43 @@ export async function prepareLocalProfile(root, configFile) {
     try { await lstat(path); return true; }
     catch (error) { if (error.code === "ENOENT") return false; throw error; }
   };
+  const legacyDefault = (config) => config.version === 1 && config.role === "host" && config.mode === "local"
+    && config.listen.host === "127.0.0.1" && config.listen.port === 4200 && config.credentialsFile === registryFile
+    && !config.hub && !config.pool && !config.delivery.enabled && config.views.length === 0
+    && config.allowedPeers.length === 0;
   const reuse = async () => {
     const selected = await readConfig(file);
-    if (selected.mode !== "local" || selected.role !== "host" || selected.hub || selected.pool || selected.delivery.enabled) {
-      fail("Local startup requires a loopback host profile without agents; use explicit --root and --config for other profiles");
+    if (!["local", "tailnet"].includes(selected.mode) || selected.role !== "host" || selected.hub || selected.pool || selected.delivery.enabled) {
+      fail("Default startup requires a host profile without agents; use explicit --root and --config for other profiles");
     }
     const { readToken } = await import("./client.mjs");
     const { authenticate, loadRegistry } = await import("./auth.mjs");
     const token = await readToken(tokenFile);
     authenticate(await loadRegistry(selected.credentialsFile), `Bearer ${token}`);
+    // Upgrade only the exact generated loopback profile; leave customized profiles untouched.
+    if (legacyDefault(selected)) {
+      let lock;
+      try { lock = await openFile(lockFile, "wx", 0o600); }
+      catch (error) {
+        if (error.code === "EEXIST") throw new Fault("active", "Default profile update is locked; retry after the other startup finishes");
+        throw error;
+      }
+      let staging;
+      try {
+        const current = await readConfig(file);
+        if (!legacyDefault(current)) {
+          throw new Fault("active", "Default profile changed during the update");
+        }
+        staging = await mkdtemp(join(directory, ".upgrade-"));
+        const next = { version: 1, role: "host", mode: "tailnet", listen: { host: "0.0.0.0", port: 4200 },
+          tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+        await writeFile(join(staging, "relay.json"), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+        await rename(join(staging, "relay.json"), file);
+      } finally {
+        try { if (staging) await rm(staging, { recursive: true, force: true }); }
+        finally { await lock.close(); await unlink(lockFile); }
+      }
+    }
     return { tokenFile };
   };
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -123,7 +151,7 @@ export async function prepareLocalProfile(root, configFile) {
       inboxRead: [board], workRead: [board],
       inspect: { messages: false, receipts: false, audit: false, topology: true }, reportDevice: null,
     } }] };
-    const selected = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4200 },
+    const selected = { version: 1, role: "host", mode: "tailnet", listen: { host: "0.0.0.0", port: 4200 },
       tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
     staging = await mkdtemp(join(directory, ".setup-"));
     const files = [["viewer.token", tokenFile, `${token}\n`],
@@ -172,7 +200,7 @@ export async function readConfig(configFile) {
   exact(doc, doc.version === 1
     ? ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views"]
     : ["version", "role", "mode", "listen", "tls", "allowedPeers", "credentialsFile", "hub", "pool", "views", "delivery"], "config");
-  if (!["host", "hub"].includes(doc.role) || !["local", "lan", "tailscale"].includes(doc.mode)) fail("Config role or mode is invalid");
+  if (!["host", "hub"].includes(doc.role) || !["local", "lan", "tailscale", "tailnet"].includes(doc.mode)) fail("Config role or mode is invalid");
   const delivery = doc.version === 1 ? Object.freeze({ enabled: false, clients: Object.freeze([]), pollMs: LIMITS.deliveryPollMs }) : (() => {
     exact(doc.delivery, ["enabled", "clients", "pollMs"], "delivery");
     if (typeof doc.delivery.enabled !== "boolean") fail("delivery.enabled is invalid");
@@ -188,7 +216,8 @@ export async function readConfig(configFile) {
   const family = isIP(host);
   if (!family || host.includes("%")) fail("listen.host must be a literal IP address");
   const loopback = host === "127.0.0.1" || host === "::1";
-  if ((doc.mode === "lan") === loopback || (doc.mode !== "lan" && !loopback)) fail("listen address does not match mode");
+  if (doc.mode === "tailnet" ? (doc.role !== "host" || host !== "0.0.0.0")
+    : (doc.mode === "lan") === loopback || (doc.mode !== "lan" && !loopback)) fail("listen address does not match mode");
   if (doc.mode === "lan" && (!family || host === "0.0.0.0" || host === "::" || host.startsWith("224.") || host.toLowerCase().startsWith("ff"))) fail("LAN listener must be a unicast address");
   const port = int(doc.listen.port, "listen.port", 1, 65535);
   let tls = null;
