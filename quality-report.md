@@ -32,6 +32,13 @@ This report covers the Relay overview/topology composition and its existing stat
 
 The fixture exercised 320, 360, 390, 760, 1000, and 1440 pixel compositions, filter, selection, keyboard navigation, collapse/expand, refresh, committed-event feedback, reduced motion, and state recovery. The responsive capture runner also records the 1440px, 1000px, 390px top, and 390px board-lane compositions in `docs/captures/responsive-capture.json`. The captured evidence is generated from an isolated real Relay store and broker.
 
+## Delivered-bundle validation
+
+- `unzip -t` passed for the delivered archive; a fresh extraction contained 89 files, including all required source, records, frames, captures, and recording assets.
+- The extracted bundle's CLI smoke path passed: setup, worker registration, session join, message send, and stats read all completed from the extracted files.
+- The native approved runtime launched the current source with `npm start -- --no-copy-token` and reported `http://127.0.0.1:4200`; the fixture browser and responsive capture runner then completed against the functioning broker.
+- The ordinary restricted scratch runtime cannot launch the extracted `npm start` command because its platform process-identity check reports `unavailable: Process identity cannot be verified on this platform`. This is an environment limitation; the same command launched successfully in the approved native runtime above.
+
 ## Accessibility review
 
 - Semantic buttons and inputs remain the interaction primitives.

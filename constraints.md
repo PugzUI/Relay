@@ -21,4 +21,4 @@
 - The fixture browser uses a real isolated Relay store and broker, but it is not a native agent or production network qualification.
 - The captures prove the rendered UI and fixture state transitions. They do not prove remote deployment, native-agent permissions, or host-service behavior.
 - No external image, Inkscape asset, Blender scene, or third-party visual reference is needed because the subject is a data-native operational topology and the approved material language is flat code-rendered UI.
-- Independent critic-agent ownership was unavailable after the initial spawn, so the ledger labels the final visual review as explicitly non-independent and leaves the human visual review item open.
+- The initial critic-agent spawn was unavailable, but an independent visual/interaction review was completed in the correction pass and is recorded as Round 3 in `ledger.md`. A representative live-device review remains human-owned.
