@@ -65,6 +65,12 @@
 
 **Independent verdict:** `ship` for the scoped source and fixture-verified experience, with the live-device review items in `quality-report.md` remaining human-owned.
 
+## Round 4: post-correction recheck
+
+**Evidence:** a fresh critic rechecked the final filtered, narrow, disconnected, and board-lane captures after the corrections.
+
+**Result:** all four findings were visibly resolved. The filtered frame now labels the retained worker `Worker · filtered out`; the 390px filter reads in a full row; the disconnected capture shows the red topbar marker; and the 390×1200 board lane shows the board inspector, legend, selector, both record panes, and pagers without horizontal overflow. **Verdict: `ship`.**
+
 ## Verdict
 
 `ship` for the scoped source and fixture-verified experience, with the human live-device review item above recorded in `quality-report.md`.
