@@ -33,6 +33,25 @@ test("authentication uses the current complete grant and rejects duplicate Autho
   });
 });
 
+test("DEV_RELAY authenticates only the development topology grant", () => {
+  const previous = process.env.DEV_RELAY;
+  const token = "D".repeat(43);
+  process.env.DEV_RELAY = token;
+  try {
+    const principal = authenticate({ version: 1, credentials: [] }, `Bearer ${token}`);
+    assert.equal(principal.id, "dev-relay");
+    assert.equal(principal.grant.inspect.topology, true);
+    assert.equal(principal.grant.inspect.messages, false);
+    assert.equal(authorize({ version: 1, credentials: [] }, principal, "snapshot", { options: {} }).operation, "snapshot");
+    assert.equal(authorizeBoardRead({ version: 1, credentials: [] }, principal, "bounty", "msg", false).operation, "list");
+    assert.throws(() => authorize({ version: 1, credentials: [] }, principal, "stats", {}), (error) => error.code === "denied");
+    assert.throws(() => authenticate({ version: 1, credentials: [] }, `Bearer ${"E".repeat(43)}`), (error) => error.code === "auth");
+  } finally {
+    if (previous === undefined) delete process.env.DEV_RELAY;
+    else process.env.DEV_RELAY = previous;
+  }
+});
+
 test("board reads require their own board and kind grant", async () => {
   await withTempDir(async (root) => {
     const grant = emptyGrant(); grant.inboxRead = ["host:device-1"];

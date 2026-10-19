@@ -6,7 +6,7 @@ import { join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { CliInputError, parseArgs, parseStrictJson, readEnvelope } from "../src/cli.mjs";
+import { CliInputError, loadDotEnv, parseArgs, parseStrictJson, readEnvelope } from "../src/cli.mjs";
 
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 
@@ -35,6 +35,19 @@ test("A17 parses repeated caps and preserves spaces and Unicode in values", () =
   const parsed = parseArgs(["register", "worker", "--root", "/tmp/a folder/雪", "--cap", "gpu", "--cap=inspect"]);
   assert.equal(parsed.flags.root, "/tmp/a folder/雪");
   assert.deepEqual(parsed.flags.cap, ["gpu", "inspect"]);
+});
+
+test("developer dotenv loading preserves inherited environment values", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const root = await mkdtemp(join(tmpdir(), "relay-dotenv-"));
+  try {
+    const env = { EXISTING: "keep" };
+    await writeFile(join(root, ".env"), "DEV_RELAY=local-token\nEXISTING=replace-me\n");
+    assert.equal(loadDotEnv(join(root, ".env"), env), true);
+    assert.equal(env.DEV_RELAY, "local-token");
+    assert.equal(env.EXISTING, "keep");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("A17 rejects duplicate, unknown, malformed, and mixed selectors before dispatch", () => {

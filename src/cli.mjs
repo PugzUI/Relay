@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { spawn } from "node:child_process";
 import { networkInterfaces } from "node:os";
+import { readFileSync } from "node:fs";
 import { parseStrictJsonText } from "./strict-json.mjs";
 
 const route = {
@@ -34,6 +35,17 @@ const route = {
 
 export class CliInputError extends Error {
   constructor(message) { super(message); this.name = "CliInputError"; }
+}
+
+export function loadDotEnv(path = ".env", env = process.env) {
+  let source;
+  try { source = readFileSync(path, "utf8"); } catch { return false; }
+  for (const line of source.split(/\r?\n/u)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/u.exec(line);
+    if (!match || Object.hasOwn(env, match[1])) continue;
+    env[match[1]] = match[2].replace(/^(['"])(.*)\1$/u, "$2");
+  }
+  return true;
 }
 
 export function parseArgs(argv) {
@@ -169,6 +181,7 @@ export function parseStrictJson(source) {
 }
 
 export async function main(argv = process.argv.slice(2), io = process) {
+  loadDotEnv();
   let parsed;
   try { parsed = parseArgs(argv); }
   catch (error) { return reportError(error, argv.includes("--json"), io); }
