@@ -269,9 +269,10 @@ const CARRIER_ASSERTIONS = [
 // at least one assertion, "ignore" means it must be caught by none. Any other
 // value is a hard error at load time, never a fallback to "ignore" -- a
 // mislabelled case would otherwise lose the ability to fail at all. The
-// "kind" field only records what the case is (a free field the census covers,
-// an inert control, or a derivation the carrier declares unpinned); the gate
-// reads the direction, not the kind.
+// "coverage" field only records what the case is (a free field the census
+// covers, an inert control, or a derivation the carrier declares unpinned);
+// the gate reads the direction, not the coverage, and the two are checked
+// against each other at load time.
 const CARRIER_DIRECTIONS = new Set(["flag", "ignore"]);
 const CARRIER_MUTANTS = [
   {
