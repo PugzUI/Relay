@@ -187,9 +187,30 @@ try {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
+    const overflow = await page.evaluate(() => {
+      const root = document.documentElement;
+      const offender = [...document.querySelectorAll("body *")]
+        .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.right > window.innerWidth + 1)
+        .sort((a, b) => b.rect.right - a.rect.right)[0];
+      return {
+        scrollWidth: root.scrollWidth,
+        innerWidth: window.innerWidth,
+        offender: offender
+          ? `${offender.node.tagName.toLowerCase()}.${String(offender.node.className)
+              .split(" ")
+              .filter(Boolean)
+              .join(".")}`
+          : null,
+        offenderWidth: offender ? Math.round(offender.rect.width) : null,
+      };
+    });
     assert.equal(
-      await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      overflow.scrollWidth > overflow.innerWidth,
       false,
+      `horizontal overflow at ${width}px: scrollWidth ${overflow.scrollWidth} > innerWidth ${
+        overflow.innerWidth
+      } (widest offender ${overflow.offender ?? "none"} at ${overflow.offenderWidth ?? 0}px)`,
     );
     assert.ok((await dimensions()).every(([w, h]) => w === 96 && h === 44));
   }
