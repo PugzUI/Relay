@@ -19,52 +19,134 @@ import {
 } from "../ui/state.mjs";
 import { compileNodeFilter, filteredTopology, filterSuggestions } from "../ui/filter.mjs";
 
-const device = { id: "dev-1", name: "north", init: 1, authority: "auth-1", receivedAt: 900, stale: true, free: null };
-const agent = { id: "north:worker:prime", device: "dev-1", runtime: "worker", slot: "prime", caps: [], epoch: 1, init: 2, state: "stale", assignmentCount: 0, receivedAt: 800 };
-const board = { id: "bounty", kind: "bounty", device: null, authority: "auth-1", inbox: 1, pending: 2, claimed: 0, terminal: 0, reported: false, receivedAt: null };
+const device = {
+  id: "dev-1",
+  name: "north",
+  init: 1,
+  authority: "auth-1",
+  receivedAt: 900,
+  stale: true,
+  free: null,
+};
+const agent = {
+  id: "north:worker:prime",
+  device: "dev-1",
+  runtime: "worker",
+  slot: "prime",
+  caps: [],
+  epoch: 1,
+  init: 2,
+  state: "stale",
+  assignmentCount: 0,
+  receivedAt: 800,
+};
+const board = {
+  id: "bounty",
+  kind: "bounty",
+  device: null,
+  authority: "auth-1",
+  inbox: 1,
+  pending: 2,
+  claimed: 0,
+  terminal: 0,
+  reported: false,
+  receivedAt: null,
+};
 
 test("structured topology filters combine kind, state and capability using only snapshot fields", () => {
-  const sample = { devices: [device], agents: [
-    { ...agent, id: "north:worker:prime", state: "busy", caps: ["inspect"] },
-    { ...agent, id: "north:worker:001", state: "registered", caps: ["verify"] },
-  ], boards: [board] };
+  const sample = {
+    devices: [device],
+    agents: [
+      { ...agent, id: "north:worker:prime", state: "busy", caps: ["inspect"] },
+      { ...agent, id: "north:worker:001", state: "registered", caps: ["verify"] },
+    ],
+    boards: [board],
+  };
   const worker = filteredTopology(sample, "type:worker state:busy cap:inspect");
   assert.deepEqual(worker.counts, { devices: 1, workers: 1, boards: 0 });
   assert.equal(worker.groups[0].agents[0].id, "north:worker:prime");
-  assert.deepEqual(filteredTopology(sample, "type:board").counts, { devices: 0, workers: 0, boards: 1 });
-  assert.deepEqual(filteredTopology(sample, "type:device").counts, { devices: 1, workers: 0, boards: 0 });
-  assert.deepEqual(filteredTopology(sample, "cap:verify").groups[0].agents.map((row) => row.id), ["north:worker:001"]);
+  assert.deepEqual(filteredTopology(sample, "type:board").counts, {
+    devices: 0,
+    workers: 0,
+    boards: 1,
+  });
+  assert.deepEqual(filteredTopology(sample, "type:device").counts, {
+    devices: 1,
+    workers: 0,
+    boards: 0,
+  });
+  assert.deepEqual(
+    filteredTopology(sample, "cap:verify").groups[0].agents.map((row) => row.id),
+    ["north:worker:001"],
+  );
   assert.equal(filteredTopology(sample, "type:worker cap:private").groups.length, 0);
   assert.equal(filteredTopology(sample, "north").groups[0].agents.length, 2);
   assert.equal(compileNodeFilter("type:worker cap:inspect").board(board), false);
-  assert.deepEqual(filterSuggestions(sample), ["cap:inspect", "cap:verify", "state:busy", "state:local", "state:registered", "type:board", "type:device", "type:worker"]);
+  assert.deepEqual(filterSuggestions(sample), [
+    "cap:inspect",
+    "cap:verify",
+    "state:busy",
+    "state:local",
+    "state:registered",
+    "type:board",
+    "type:device",
+    "type:worker",
+  ]);
   assert.deepEqual(filterSuggestions(null), []);
 });
 const scope = "a".repeat(64);
 const filter = "b".repeat(64);
-const canonicalJson = (value) => Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
-  : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
-    : JSON.stringify(value);
-const encodeToken = (value) => btoa(canonicalJson(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-const feedCursor = (seq = 1, authority = "auth-1") => encodeToken({ v: 1, authority, stream: "stream", seq, scope });
-const messageCursor = (last = 0, authority = "auth-1") => encodeToken({ v: 1, authority, scope, filter, boundary: 20, last });
-const snapshotCursor = (time = 1_000) => encodeToken({ v: 1, authority: "auth-1", scope, filter, boundary: 1, time, last: { agent: "", link: "" } });
+const canonicalJson = (value) =>
+  Array.isArray(value)
+    ? `[${value.map(canonicalJson).join(",")}]`
+    : value && typeof value === "object"
+      ? `{${Object.keys(value)
+          .sort()
+          .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+          .join(",")}}`
+      : JSON.stringify(value);
+const encodeToken = (value) =>
+  btoa(canonicalJson(value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const feedCursor = (seq = 1, authority = "auth-1") =>
+  encodeToken({ v: 1, authority, stream: "stream", seq, scope });
+const messageCursor = (last = 0, authority = "auth-1") =>
+  encodeToken({ v: 1, authority, scope, filter, boundary: 20, last });
+const snapshotCursor = (time = 1_000) =>
+  encodeToken({
+    v: 1,
+    authority: "auth-1",
+    scope,
+    filter,
+    boundary: 1,
+    time,
+    last: { agent: "", link: "" },
+  });
 
 function snapshot(overrides = {}) {
   const value = {
-    v: 1, authority: "auth-1", time: 1_000, cursor: feedCursor(),
-    devices: [device], agents: [agent], boards: [board], links: [],
+    v: 1,
+    authority: "auth-1",
+    time: 1_000,
+    cursor: feedCursor(),
+    devices: [device],
+    agents: [agent],
+    boards: [board],
+    links: [],
     totals: { devices: 1, agents: 1, boards: 1, links: 0 },
-    visible: { devices: 1, agents: 1, boards: 1, links: 0 }, complete: true, next: null,
+    visible: { devices: 1, agents: 1, boards: 1, links: 0 },
+    complete: true,
+    next: null,
     ...overrides,
   };
   return value;
 }
 
 test("A42 snapshot keeps exact totals distinct from visible rows and stale capacity unknown", () => {
-  const value = parseSnapshot(snapshot({
-    totals: { devices: 3, agents: 14, boards: 2, links: 9 },
-  }));
+  const value = parseSnapshot(
+    snapshot({
+      totals: { devices: 3, agents: 14, boards: 2, links: 9 },
+    }),
+  );
   assert.equal(value.totals.agents, 14);
   assert.equal(value.visible.agents, 1);
   assert.equal(value.devices[0].free, null);
@@ -72,87 +154,225 @@ test("A42 snapshot keeps exact totals distinct from visible rows and stale capac
 });
 
 test("A42 rejects inconsistent visible counts and unsupported snapshot fields", () => {
-  assert.throws(() => parseSnapshot(snapshot({ visible: { devices: 0, agents: 1, boards: 1, links: 0 } })), /inconsistent counts/);
+  assert.throws(
+    () => parseSnapshot(snapshot({ visible: { devices: 0, agents: 1, boards: 1, links: 0 } })),
+    /inconsistent counts/,
+  );
   assert.throws(() => parseSnapshot(snapshot({ madeUp: true })), /unknown field/);
 });
 
 test("canonical cursors accept CORE key order and reject insertion-ordered JSON", () => {
-  assert.deepEqual(parseFeedFrame("reset", { event: "reset", cursor: feedCursor(), reason: "restart" }).event, "reset");
-  const insertionOrdered = btoa(JSON.stringify({ v: 1, authority: "auth-1", stream: "stream", seq: 1, scope }))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-  assert.throws(() => parseFeedFrame("reset", { event: "reset", cursor: insertionOrdered, reason: "restart" }), /noncanonical JSON/);
+  assert.deepEqual(
+    parseFeedFrame("reset", { event: "reset", cursor: feedCursor(), reason: "restart" }).event,
+    "reset",
+  );
+  const insertionOrdered = btoa(
+    JSON.stringify({ v: 1, authority: "auth-1", stream: "stream", seq: 1, scope }),
+  )
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  assert.throws(
+    () => parseFeedFrame("reset", { event: "reset", cursor: insertionOrdered, reason: "restart" }),
+    /noncanonical JSON/,
+  );
 });
 
 test("A43 only committed accepted deltas create a bounded path pulse", () => {
   const state = createUiState();
-  const delta = { v: 1, stream: "stream", seq: 4, time: 1, type: "post", from: "agent", to: "bounty", mid: "opaque", state: "posted", code: null, committed: true };
+  const delta = {
+    v: 1,
+    stream: "stream",
+    seq: 4,
+    time: 1,
+    type: "post",
+    from: "agent",
+    to: "bounty",
+    mid: "opaque",
+    state: "posted",
+    code: null,
+    committed: true,
+  };
   const wrapped = { event: "delta", cursor: feedCursor(4), data: delta };
   assert.equal(commitPulse(state, parseFeedFrame("delta", wrapped), 100), true);
   const refusal = { ...delta, seq: 5, type: "refusal", code: "denied", committed: false };
-  assert.equal(commitPulse(state, parseFeedFrame("delta", { event: "delta", cursor: feedCursor(5), data: refusal }), 101), false);
+  assert.equal(
+    commitPulse(
+      state,
+      parseFeedFrame("delta", { event: "delta", cursor: feedCursor(5), data: refusal }),
+      101,
+    ),
+    false,
+  );
   assert.equal(commitPulse(state, { event: "keepalive", time: 1 }, 102), false);
   assert.equal(state.pulses.length, 1);
   assert.equal(state.pulses[0].until, 1_600);
 });
 
 test("A43 inconsistent commit flags are rejected before rendering", () => {
-  assert.throws(() => parseFeedFrame("delta", { event: "delta", cursor: feedCursor(), data: {
-    v: 1, stream: "stream", seq: 1, time: 0, type: "refusal", from: null, to: null, mid: null, state: null, code: "denied", committed: true,
-  } }), /inconsistent commit/);
+  assert.throws(
+    () =>
+      parseFeedFrame("delta", {
+        event: "delta",
+        cursor: feedCursor(),
+        data: {
+          v: 1,
+          stream: "stream",
+          seq: 1,
+          time: 0,
+          type: "refusal",
+          from: null,
+          to: null,
+          mid: null,
+          state: null,
+          code: "denied",
+          committed: true,
+        },
+      }),
+    /inconsistent commit/,
+  );
 });
 
 test("A44 snapshot pages retain one authority boundary and repeat identical device and board summaries", () => {
   const first = snapshot({ complete: false, next: snapshotCursor() });
-  const second = snapshot({ complete: true, next: null, agents: [], visible: { devices: 1, agents: 0, boards: 1, links: 0 } });
+  const second = snapshot({
+    complete: true,
+    next: null,
+    agents: [],
+    visible: { devices: 1, agents: 0, boards: 1, links: 0 },
+  });
   const merged = mergeSnapshotPages([first, second]);
   assert.equal(merged.devices.length, 1);
   assert.equal(merged.boards.length, 1);
   assert.equal(merged.complete, true);
   assert.equal(merged.next, null);
-  assert.throws(() => mergeSnapshotPages([first, { ...second, authority: "other", cursor: feedCursor(1, "other") }]), /boundary changed/);
+  assert.throws(
+    () =>
+      mergeSnapshotPages([
+        first,
+        { ...second, authority: "other", cursor: feedCursor(1, "other") },
+      ]),
+    /boundary changed/,
+  );
 });
 
 test("A44 changed repeated summary and historical reset are not accepted as current state", () => {
   const changed = snapshot({ devices: [{ ...device, stale: false }] });
-  assert.throws(() => mergeSnapshotPages([snapshot({ complete: false, next: snapshotCursor() }), changed]), /changed devices row/);
-  assert.deepEqual(parseFeedFrame("reset", { event: "reset", cursor: feedCursor(), reason: "restart" }), { event: "reset", cursor: feedCursor(), reason: "restart" });
+  assert.throws(
+    () => mergeSnapshotPages([snapshot({ complete: false, next: snapshotCursor() }), changed]),
+    /changed devices row/,
+  );
+  assert.deepEqual(
+    parseFeedFrame("reset", { event: "reset", cursor: feedCursor(), reason: "restart" }),
+    { event: "reset", cursor: feedCursor(), reason: "restart" },
+  );
 });
 
 test("A45 bounded snapshot and stream schemas reject oversized collections and unknown feed types", () => {
-  assert.throws(() => parseSnapshot(snapshot({ links: Array(513).fill({ ...agent, id: "l", from: "a", to: "b", kind: "report", state: "active", mid: null, time: null }) })), /invalid collection/);
-  assert.throws(() => parseFeedFrame("delta", { event: "delta", cursor: feedCursor(), data: {
-    v: 1, stream: "stream", seq: 1, time: 0, type: "heartbeat", from: null, to: null, mid: null, state: null, code: null, committed: false,
-  } }), /invalid event/);
+  assert.throws(
+    () =>
+      parseSnapshot(
+        snapshot({
+          links: Array(513).fill({
+            ...agent,
+            id: "l",
+            from: "a",
+            to: "b",
+            kind: "report",
+            state: "active",
+            mid: null,
+            time: null,
+          }),
+        }),
+      ),
+    /invalid collection/,
+  );
+  assert.throws(
+    () =>
+      parseFeedFrame("delta", {
+        event: "delta",
+        cursor: feedCursor(),
+        data: {
+          v: 1,
+          stream: "stream",
+          seq: 1,
+          time: 0,
+          type: "heartbeat",
+          from: null,
+          to: null,
+          mid: null,
+          state: null,
+          code: null,
+          committed: false,
+        },
+      }),
+    /invalid event/,
+  );
 });
 
 test("A45 SSE reader parses many frames from one chunk and cancels an oversized frame", async () => {
   const frame = 'event: keepalive\ndata: {"event":"keepalive","time":1}\n\n';
   const chunk = new TextEncoder().encode(frame.repeat(400));
   let count = 0;
-  await consumeSseBody(new ReadableStream({ start(controller) { controller.enqueue(chunk); controller.close(); } }), new AbortController().signal, () => { count += 1; });
+  await consumeSseBody(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+    new AbortController().signal,
+    () => {
+      count += 1;
+    },
+  );
   assert.equal(count, 400);
-  const oversized = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${"x".repeat(16_500)}\n\n`)); controller.close(); } });
-  await assert.rejects(consumeSseBody(oversized, new AbortController().signal, () => {}), /frame limit/);
+  const oversized = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`data: ${"x".repeat(16_500)}\n\n`));
+      controller.close();
+    },
+  });
+  await assert.rejects(
+    consumeSseBody(oversized, new AbortController().signal, () => {}),
+    /frame limit/,
+  );
 });
 
 test("SSE cancellation stops dispatching already buffered frames", async () => {
   const controller = new AbortController();
   const frame = 'event: keepalive\ndata: {"event":"keepalive","time":1}\n\n';
   let count = 0;
-  const body = new ReadableStream({ start(stream) {
-    stream.enqueue(new TextEncoder().encode(frame.repeat(2)));
-    stream.close();
-  } });
-  await consumeSseBody(body, controller.signal, () => { count += 1; controller.abort(); });
+  const body = new ReadableStream({
+    start(stream) {
+      stream.enqueue(new TextEncoder().encode(frame.repeat(2)));
+      stream.close();
+    },
+  });
+  await consumeSseBody(body, controller.signal, () => {
+    count += 1;
+    controller.abort();
+  });
   assert.equal(count, 1);
   assert.equal(body.locked, false);
 });
 
 test("SSE cancellation releases an idle reader without waiting for another frame", async () => {
   const controller = new AbortController();
-  let source, cancelled = false, settled = false;
-  const body = new ReadableStream({ start(stream) { source = stream; }, cancel() { cancelled = true; } });
-  const reading = consumeSseBody(body, controller.signal, () => {}).finally(() => { settled = true; });
+  let source,
+    cancelled = false,
+    settled = false;
+  const body = new ReadableStream({
+    start(stream) {
+      source = stream;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const reading = consumeSseBody(body, controller.signal, () => {}).finally(() => {
+    settled = true;
+  });
   try {
     controller.abort();
     await new Promise((resolve) => setImmediate(resolve));
@@ -183,22 +403,55 @@ test("A47 board selection invalidates both independent pane generations and clea
 test("A47 layout keeps narrow panes readable, keyboard focus visible, and reduced motion static", async () => {
   const style = await readFile(new URL("../ui/style.css", import.meta.url), "utf8");
   assert.match(style, /:focus-visible\s*\{[^}]*outline/);
-  assert.match(style, /@media \(max-width: 760px\)[\s\S]*?\.panes\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(
+    style,
+    /@media \(max-width: 760px\)[\s\S]*?\.panes\s*\{\s*grid-template-columns: minmax\(0, 1fr\)/,
+  );
   assert.match(style, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(style, /--r-none:\s*0(?:px)?\s*;/);
   assert.match(style, /\*\s*\{[^}]*border-radius:\s*var\(--r-none\)\s*!important/);
-  assert.match(style, /\.connection\[data-state="disconnected"\]\s*\{[^}]*color:\s*var\(--c-danger\)/);
+  assert.match(
+    style,
+    /\.connection\[data-state="disconnected"\]\s*\{[^}]*color:\s*var\(--c-danger\)/,
+  );
   assert.doesNotMatch(style, /overflow-x:\s*hidden/);
 });
 
 test("A49 pane page validates kind, board, envelope and stable pagination counts", () => {
   const page = {
-    items: [{ id: "m1", seq: 1, from: "worker", to: null, board: "bounty", kind: "msg", needs: [], series: null, data: { msg: "<script>text only</script>\nα" }, state: "posted", init: 1, acked: null }],
-    total: 2, visible: 1, complete: false, cursor: messageCursor(), next: messageCursor(1), firstSeq: 1, pruned: 0,
+    items: [
+      {
+        id: "m1",
+        seq: 1,
+        from: "worker",
+        to: null,
+        board: "bounty",
+        kind: "msg",
+        needs: [],
+        series: null,
+        data: { msg: "<script>text only</script>\nα" },
+        state: "posted",
+        init: 1,
+        acked: null,
+      },
+    ],
+    total: 2,
+    visible: 1,
+    complete: false,
+    cursor: messageCursor(),
+    next: messageCursor(1),
+    firstSeq: 1,
+    pruned: 0,
   };
-  assert.equal(parseBoardPage(page, "bounty", "msg", "auth-1").page.items[0].data.msg, "<script>text only</script>\nα");
+  assert.equal(
+    parseBoardPage(page, "bounty", "msg", "auth-1").page.items[0].data.msg,
+    "<script>text only</script>\nα",
+  );
   assert.throws(() => parseBoardPage(page, "bounty", "work", "auth-1"), /scope mismatch/);
-  assert.throws(() => parseBoardPage({ ...page, total: 0 }, "bounty", "msg", "auth-1"), /invalid counts/);
+  assert.throws(
+    () => parseBoardPage({ ...page, total: 0 }, "bounty", "msg", "auth-1"),
+    /invalid counts/,
+  );
 });
 
 test("reported metadata can bind recovered body authority once and rejects later pane or page changes", () => {
@@ -208,16 +461,34 @@ test("reported metadata can bind recovered body authority once and rejects later
   state.snapshot = parseSnapshot(snapshot({ boards: [reported] }));
   selectBoard(state, reported.id);
 
-  const recovered = { items: [], total: 0, visible: 0, complete: true, cursor: messageCursor(0, hostAuthority), next: null, firstSeq: null, pruned: 0 };
+  const recovered = {
+    items: [],
+    total: 0,
+    visible: 0,
+    complete: true,
+    cursor: messageCursor(0, hostAuthority),
+    next: null,
+    firstSeq: null,
+    pruned: 0,
+  };
   const parsed = parseBoardPage(recovered, reported.id, "msg");
   bindBoardAuthority(state, parsed.authority);
   assert.equal(state.boardAuthority, hostAuthority);
-  assert.equal(parseBoardPage(recovered, reported.id, "msg", state.boardAuthority).authority, hostAuthority);
+  assert.equal(
+    parseBoardPage(recovered, reported.id, "msg", state.boardAuthority).authority,
+    hostAuthority,
+  );
 
   const changedRepeat = { ...recovered, cursor: messageCursor(0, "changed-authority") };
-  assert.throws(() => parseBoardPage(changedRepeat, reported.id, "msg", state.boardAuthority), /authority mismatch/);
+  assert.throws(
+    () => parseBoardPage(changedRepeat, reported.id, "msg", state.boardAuthority),
+    /authority mismatch/,
+  );
   const changedPeerPane = { ...recovered, cursor: messageCursor(0, "changed-authority") };
-  assert.throws(() => parseBoardPage(changedPeerPane, reported.id, "work", state.boardAuthority), /authority mismatch/);
+  assert.throws(
+    () => parseBoardPage(changedPeerPane, reported.id, "work", state.boardAuthority),
+    /authority mismatch/,
+  );
   assert.throws(() => bindBoardAuthority(state, "changed-authority"), /authority mismatch/);
 });
 
@@ -226,7 +497,21 @@ test("A50 selecting and parsing shared Inbox pages creates no read receipt or lo
   state.snapshot = parseSnapshot(snapshot());
   selectBoard(state, "bounty");
   const before = structuredClone(state);
-  parseBoardPage({ items: [], total: 0, visible: 0, complete: true, cursor: messageCursor(), next: null, firstSeq: null, pruned: 0 }, "bounty", "msg", "auth-1");
+  parseBoardPage(
+    {
+      items: [],
+      total: 0,
+      visible: 0,
+      complete: true,
+      cursor: messageCursor(),
+      next: null,
+      firstSeq: null,
+      pruned: 0,
+    },
+    "bounty",
+    "msg",
+    "auth-1",
+  );
   assert.deepEqual(state, before);
   assert.equal("readPosition" in state, false);
 });
@@ -247,9 +532,15 @@ test("A51 revoked credentials clear selected and cached private page state", asy
   const source = await readFile(new URL("../ui/main.mjs", import.meta.url), "utf8");
   assert.match(source, /error\?\.code === "auth" \|\| \(error\?\.code === "denied" && !pane\)/);
   assert.match(source, /function handleAuthFault\(error, token\)[\s\S]*?state\.token !== token/);
-  assert.match(source, /const token = state\.token;[\s\S]*?Authorization: `Bearer \$\{token\}`, Accept: "text\/event-stream"/);
+  assert.match(
+    source,
+    /const token = state\.token;[\s\S]*?Authorization: `Bearer \$\{token\}`, Accept: "text\/event-stream"/,
+  );
   assert.match(source, /handleAuthFault\(error, token\)/);
-  assert.match(source, /if \(generation !== pane\.generation\) return;[\s\S]*?denyPane\(state, name, generation\)/);
+  assert.match(
+    source,
+    /if \(generation !== pane\.generation\) return;[\s\S]*?denyPane\(state, name, generation\)/,
+  );
   const state = createUiState();
   state.token = "revoked";
   state.snapshot = parseSnapshot(snapshot());
@@ -310,11 +601,13 @@ test("A51 work-only reader retains permitted Bounties when Inbox is denied", () 
 test("A51 a stale mid-read pane refusal cannot clear the newly selected scope", () => {
   const state = createUiState();
   state.token = "still-valid";
-  state.snapshot = parseSnapshot(snapshot({
-    boards: [board, { ...board, id: "host:dev-1" }],
-    totals: { devices: 1, agents: 1, boards: 2, links: 0 },
-    visible: { devices: 1, agents: 1, boards: 2, links: 0 },
-  }));
+  state.snapshot = parseSnapshot(
+    snapshot({
+      boards: [board, { ...board, id: "host:dev-1" }],
+      totals: { devices: 1, agents: 1, boards: 2, links: 0 },
+      visible: { devices: 1, agents: 1, boards: 2, links: 0 },
+    }),
+  );
   selectBoard(state, "bounty");
   const oldGeneration = state.inbox.generation;
   selectBoard(state, "host:dev-1");
@@ -330,7 +623,8 @@ test("native CORE snapshot, board pages, and feed deltas match the UI contract",
   skip: !existsSync(new URL("../src/relay.mjs", import.meta.url)),
 }, async () => {
   const [{ open, setup }, { createFeed }] = await Promise.all([
-    import("../src/index.mjs"), import("../src/feed.mjs"),
+    import("../src/index.mjs"),
+    import("../src/feed.mjs"),
   ]);
   const root = await mkdtemp(join(tmpdir(), "relay-ui-native-"));
   let relay;
@@ -350,8 +644,18 @@ test("native CORE snapshot, board pages, and feed deltas match the UI contract",
     };
     relay.post(session.id, board, { msg: "inbox probe" });
     relay.post(session.id, board, { work: { task: "bounty probe" } });
-    const inbox = parseBoardPage(relay.list({ board, kind: "msg", limit: 1, data: true }, authorization), board, "msg", relay.authority);
-    const bounties = parseBoardPage(relay.list({ board, kind: "work", limit: 1, data: true }, authorization), board, "work", relay.authority);
+    const inbox = parseBoardPage(
+      relay.list({ board, kind: "msg", limit: 1, data: true }, authorization),
+      board,
+      "msg",
+      relay.authority,
+    );
+    const bounties = parseBoardPage(
+      relay.list({ board, kind: "work", limit: 1, data: true }, authorization),
+      board,
+      "work",
+      relay.authority,
+    );
     assert.equal(inbox.page.items.length, 1);
     assert.equal(bounties.page.items.length, 1);
 
@@ -364,13 +668,20 @@ test("native CORE snapshot, board pages, and feed deltas match the UI contract",
     assert.equal(snapshotPage.boards[0].id, board);
 
     const controller = new AbortController();
-    stream = feed.subscribe({ cursor: snapshotPage.cursor, authorization, signal: controller.signal });
+    stream = feed.subscribe({
+      cursor: snapshotPage.cursor,
+      authorization,
+      signal: controller.signal,
+    });
     const pending = stream.next();
     relay.post(session.id, board, { msg: "stream probe" });
     let timer;
-    const event = await Promise.race([pending, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("native feed probe timed out")), 2_000);
-    })]).finally(() => clearTimeout(timer));
+    const event = await Promise.race([
+      pending,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("native feed probe timed out")), 2_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
     assert.equal(event.value.event, "delta");
     assert.equal(parseFeedFrame(event.value.event, event.value).data.type, "post");
   } finally {
