@@ -14,29 +14,53 @@ async function withRecipient(run) {
     setup({ root: join(root, "local"), device: "local" });
     local = openForBroker({ root: join(root, "local"), role: "host", ownerToken: "R".repeat(32) });
     hub = open({ root: join(root, "hub"), device: "hub", role: "hub" });
-    const sender = hub.register("sender"), worker = hub.register("worker");
-    const senderSession = hub.join(sender.id), session = hub.join(worker.id);
+    const sender = hub.register("sender"),
+      worker = hub.register("worker");
+    const senderSession = hub.join(sender.id),
+      session = hub.join(worker.id);
     const message = hub.send(senderSession.id, worker.id, { msg: "addressed question" });
     let reads = 0;
     const pending = hub.pending.bind(hub);
-    hub.pending = (sid) => { reads++; return pending(sid); };
-    supervisor = createDeliverySupervisor({ local, hub, pool: null, launchConfigured: false,
-      ownerGeneration: claimDeliveryOwner(local).generation, clients: ["hermes"], pollMs: 30000 });
+    hub.pending = (sid) => {
+      reads++;
+      return pending(sid);
+    };
+    supervisor = createDeliverySupervisor({
+      local,
+      hub,
+      pool: null,
+      launchConfigured: false,
+      ownerGeneration: claimDeliveryOwner(local).generation,
+      clients: ["hermes"],
+      pollMs: 30000,
+    });
     await supervisor.start();
     const handle = await supervisor.bind({
-      authority: hub.authority, worker: worker.id, sid: session.id, epoch: session.epoch,
-      client: "hermes", capabilities: { context: true, idle: true, launch: false },
-      target: { runtimeInstance: "review", profile: "review", nativeSession: "review", lifecycleGeneration: "1" },
-      consumer: { status: async () => ({ state: "busy" }),
-        submit: async () => { throw new Error("No native submission is expected"); },
-        observe: async () => ({ state: "unknown" }) },
+      authority: hub.authority,
+      worker: worker.id,
+      sid: session.id,
+      epoch: session.epoch,
+      client: "hermes",
+      capabilities: { context: true, idle: true, launch: false },
+      target: {
+        runtimeInstance: "review",
+        profile: "review",
+        nativeSession: "review",
+        lifecycleGeneration: "1",
+      },
+      consumer: {
+        status: async () => ({ state: "busy" }),
+        submit: () => Promise.reject(new Error("No native submission is expected")),
+        observe: async () => ({ state: "unknown" }),
+      },
     });
     await supervisor.refresh();
     assert.equal(reads, 1, "the background poll uses one scheduled hub read");
     await run({ handle, hub, session, message, reads: () => reads });
   } finally {
     await supervisor?.close();
-    local?.close(); hub?.close();
+    local?.close();
+    hub?.close();
     await rm(root, { recursive: true, force: true });
   }
 }

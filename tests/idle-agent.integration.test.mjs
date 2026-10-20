@@ -9,20 +9,31 @@ import { createDeliverySupervisor } from "../src/delivery.mjs";
 import { createOpenCodePlugin } from "../src/adapters/opencode-plugin-core.mjs";
 
 function events() {
-  const queue = [], readers = [];
+  const queue = [],
+    readers = [];
   const end = Symbol("end");
   return {
-    emit(value) { const reader = readers.shift(); if (reader) reader(value); else queue.push(value); },
+    emit(value) {
+      const reader = readers.shift();
+      if (reader) reader(value);
+      else queue.push(value);
+    },
     async *subscribe({ signal }) {
-      const abort = () => { while (readers.length) readers.shift()(end); };
+      const abort = () => {
+        while (readers.length) readers.shift()(end);
+      };
       signal.addEventListener("abort", abort, { once: true });
       try {
         while (!signal.aborted) {
-          const value = queue.length ? queue.shift() : await new Promise((resolve) => readers.push(resolve));
+          const value = queue.length
+            ? queue.shift()
+            : await new Promise((resolve) => readers.push(resolve));
           if (value === end) return;
           yield value;
         }
-      } finally { signal.removeEventListener("abort", abort); }
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
     },
   };
 }
@@ -38,53 +49,102 @@ async function until(predicate) {
   }
 }
 
-test("idle plugin connects durable admission, scoped tools, reply and explicit completion", { timeout: soak ? 200000 : 15000 }, async () => {
+test("idle plugin connects durable admission, scoped tools, reply and explicit completion", {
+  timeout: soak ? 200000 : 15000,
+}, async () => {
   const home = await mkdtemp(join(tmpdir(), "relay-idle-integration-"));
   const priorHome = process.env.HOME;
   process.env.HOME = home;
   let relay, supervisor, disposePlugin;
   const nativeSession = "ses_idle_integration";
-  const hooks = new Map(), tools = new Map([["existing_tool", { id: "existing_tool" }]]);
-  const stream = events(), prompts = [], idleWaiters = [];
+  const hooks = new Map(),
+    tools = new Map([["existing_tool", { id: "existing_tool" }]]);
+  const stream = events(),
+    prompts = [],
+    idleWaiters = [];
   let idle = true;
   try {
     const root = join(home, "store");
     setup({ root, device: "idle-integration" });
     relay = openForBroker({ root, role: "host", ownerToken: "I".repeat(32) });
-    const sender = relay.register("sender"), worker = relay.register("opencode");
-    const senderSession = relay.join(sender.id), recipientSession = relay.join(worker.id);
-    let first = soak ? null : relay.send(senderSession.id, worker.id, { msg: "private incoming question" });
-    supervisor = createDeliverySupervisor({ local: relay, hub: null, pool: null,
-      launchConfigured: false, ownerGeneration: claimDeliveryOwner(relay).generation,
-      clients: ["opencode"], pollMs: 250 });
+    const sender = relay.register("sender"),
+      worker = relay.register("opencode");
+    const senderSession = relay.join(sender.id),
+      recipientSession = relay.join(worker.id);
+    let first = soak
+      ? null
+      : relay.send(senderSession.id, worker.id, { msg: "private incoming question" });
+    supervisor = createDeliverySupervisor({
+      local: relay,
+      hub: null,
+      pool: null,
+      launchConfigured: false,
+      ownerGeneration: claimDeliveryOwner(relay).generation,
+      clients: ["opencode"],
+      pollMs: 250,
+    });
     await supervisor.start();
     disposePlugin = await createOpenCodePlugin().setup({
       app: { version: "2.0.27" },
-      options: { relayRoot: root, profile: "integration", nativeSession, consume: true,
-        bindings: [{ authority: relay.authority, worker: worker.id, sid: recipientSession.id, epoch: recipientSession.epoch }] },
+      options: {
+        relayRoot: root,
+        profile: "integration",
+        nativeSession,
+        consume: true,
+        bindings: [
+          {
+            authority: relay.authority,
+            worker: worker.id,
+            sid: recipientSession.id,
+            epoch: recipientSession.epoch,
+          },
+        ],
+      },
       session: {
-        get: async ({ sessionID }) => ({ id: sessionID }),
-        wait: async () => { if (!idle) await new Promise((resolve) => idleWaiters.push(resolve)); },
-        prompt: async (input) => { prompts.push(input); idle = false; return { id: input.id }; },
-        hook: async (name, callback) => { hooks.set(name, callback); return () => hooks.delete(name); },
+        get: ({ sessionID }) => Promise.resolve({ id: sessionID }),
+        wait: async () => {
+          if (!idle) await new Promise((resolve) => idleWaiters.push(resolve));
+        },
+        prompt: (input) => {
+          prompts.push(input);
+          idle = false;
+          return Promise.resolve({ id: input.id });
+        },
+        hook: (name, callback) => {
+          hooks.set(name, callback);
+          return Promise.resolve(() => hooks.delete(name));
+        },
       },
       event: { subscribe: stream.subscribe },
       tool: {
-        transform: async (transform) => {
+        transform: (transform) => {
           const added = [];
-          transform({ list: () => [...tools.values()], add: (tool) => {
-            tools.set(tool.name, { ...tool, id: tool.name }); added.push(tool.name);
-          } });
-          return { dispose: () => { for (const name of added) tools.delete(name); } };
+          transform({
+            list: () => [...tools.values()],
+            add: (tool) => {
+              tools.set(tool.name, { ...tool, id: tool.name });
+              added.push(tool.name);
+            },
+          });
+          return Promise.resolve({
+            dispose: () => {
+              for (const name of added) tools.delete(name);
+            },
+          });
         },
-        list: async () => [...tools.values()],
+        list: () => Promise.resolve([...tools.values()]),
       },
     });
     assert.equal(typeof disposePlugin, "function");
     assert.ok(tools.has("existing_tool"));
     const invoke = async (name, input) => {
-      const result = await tools.get(name).execute(input, { sessionID: nativeSession,
-        signal: new AbortController().signal, id: "fixture-call", messageID: "fixture-message", agent: "build" });
+      const result = await tools.get(name).execute(input, {
+        sessionID: nativeSession,
+        signal: new AbortController().signal,
+        id: "fixture-call",
+        messageID: "fixture-message",
+        agent: "build",
+      });
       return JSON.parse(result.content);
     };
     const beginTurn = () => {
@@ -110,9 +170,15 @@ test("idle plugin connects durable admission, scoped tools, reply and explicit c
     await until(() => prompts.length === 1);
     assert.equal(prompts[0].text.includes("private incoming question"), false);
     beginTurn();
-    await assert.rejects(tools.get("relay_claim").execute({ kind: "msg" }, {
-      sessionID: "ses_foreign", signal: new AbortController().signal,
-    }));
+    await assert.rejects(
+      tools.get("relay_claim").execute(
+        { kind: "msg" },
+        {
+          sessionID: "ses_foreign",
+          signal: new AbortController().signal,
+        },
+      ),
+    );
     const message = await invoke("relay_claim", { kind: "msg" });
     assert.equal(message.message.msg, "private incoming question");
     await invoke("relay_reply", { lease: message.lease, msg: "scoped answer" });
@@ -122,7 +188,9 @@ test("idle plugin connects durable admission, scoped tools, reply and explicit c
     assert.equal(replies.items.length, 1);
     assert.equal(replies.items[0].data.msg, "scoped answer");
     await endTurn();
-    const work = relay.send(senderSession.id, worker.id, { work: { task: "x".repeat(60000), nested: [1, true, null] } });
+    const work = relay.send(senderSession.id, worker.id, {
+      work: { task: "x".repeat(60000), nested: [1, true, null] },
+    });
     await supervisor.refresh();
     await until(() => prompts.length === 2);
     beginTurn();
@@ -135,7 +203,11 @@ test("idle plugin connects durable admission, scoped tools, reply and explicit c
       assert.equal(relay.get(work.id).state, "claimed");
     }
     await endTurn();
-    assert.equal(relay.get(work.id).state, "claimed", "native turn completion must not acknowledge work");
+    assert.equal(
+      relay.get(work.id).state,
+      "claimed",
+      "native turn completion must not acknowledge work",
+    );
     await invoke("relay_ack", { lease: claimedWork.lease, outcome: "done" });
     assert.equal(relay.get(work.id).state, "done");
     await supervisor.refresh();
@@ -144,7 +216,8 @@ test("idle plugin connects durable admission, scoped tools, reply and explicit c
     await disposePlugin?.();
     await supervisor?.close();
     relay?.close();
-    if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+    if (priorHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorHome;
     await rm(home, { recursive: true, force: true });
   }
 });
