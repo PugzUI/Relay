@@ -20,13 +20,20 @@ function exact(value, keys) {
 }
 
 function checkedBindings(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 16) throw new TypeError("Recipient bindings are invalid");
+  if (!Array.isArray(value) || value.length < 1 || value.length > 16)
+    throw new TypeError("Recipient bindings are invalid");
   const ids = new Set();
   for (const binding of value) {
-    if (!exact(binding, ["authority", "epoch", "id", "sid", "worker"])
-      || !ID.test(binding.id) || typeof binding.authority !== "string"
-      || typeof binding.worker !== "string" || typeof binding.sid !== "string"
-      || !Number.isSafeInteger(binding.epoch) || binding.epoch < 0 || ids.has(binding.id)) {
+    if (
+      !exact(binding, ["authority", "epoch", "id", "sid", "worker"]) ||
+      !ID.test(binding.id) ||
+      typeof binding.authority !== "string" ||
+      typeof binding.worker !== "string" ||
+      typeof binding.sid !== "string" ||
+      !Number.isSafeInteger(binding.epoch) ||
+      binding.epoch < 0 ||
+      ids.has(binding.id)
+    ) {
       throw new TypeError("Recipient binding is invalid");
     }
     ids.add(binding.id);
@@ -35,20 +42,36 @@ function checkedBindings(value) {
 }
 
 function sessionDeadline(binding, value, now) {
-  if (!exact(value, SESSION_FIELDS) || value.id !== binding.sid || value.worker !== binding.worker
-    || value.epoch !== binding.epoch || value.ended !== null || !Number.isSafeInteger(value.until) || value.until <= now) {
+  if (
+    !exact(value, SESSION_FIELDS) ||
+    value.id !== binding.sid ||
+    value.worker !== binding.worker ||
+    value.epoch !== binding.epoch ||
+    value.ended !== null ||
+    !Number.isSafeInteger(value.until) ||
+    value.until <= now
+  ) {
     throw new Error("Relay session ownership could not be renewed");
   }
   return value.until;
 }
 
 function pendingView(binding, value) {
-  if (!exact(value, PENDING_FIELDS) || value.v !== 1 || value.authority !== binding.authority
-    || value.worker !== binding.worker || value.epoch !== binding.epoch || !/^[a-f0-9]{64}$/.test(value.revision)) {
+  if (
+    !exact(value, PENDING_FIELDS) ||
+    value.v !== 1 ||
+    value.authority !== binding.authority ||
+    value.worker !== binding.worker ||
+    value.epoch !== binding.epoch ||
+    !/^[a-f0-9]{64}$/.test(value.revision)
+  ) {
     throw new Error("Relay pending summary did not match its binding");
   }
   for (const counts of [value.pending, value.recoverable]) {
-    if (!exact(counts, ["msg", "work"]) || Object.values(counts).some((count) => !Number.isSafeInteger(count) || count < 0)) {
+    if (
+      !exact(counts, ["msg", "work"]) ||
+      Object.values(counts).some((count) => !Number.isSafeInteger(count) || count < 0)
+    ) {
       throw new Error("Relay pending counts are invalid");
     }
   }
@@ -56,15 +79,36 @@ function pendingView(binding, value) {
 }
 
 function leaseView(binding, kind, value, now) {
-  if (!["msg", "work"].includes(kind) || !exact(value, [...LEASE_FIELDS, kind])
-    || !ID.test(value.id) || !ID.test(value.mid) || value.sid !== binding.sid || value.epoch !== binding.epoch
-    || value.kind !== kind || !Number.isSafeInteger(value.attempt) || value.attempt < 1
-    || !Number.isSafeInteger(value.until) || value.until <= now) throw new Error("Relay returned an invalid addressed lease");
+  if (
+    !["msg", "work"].includes(kind) ||
+    !exact(value, [...LEASE_FIELDS, kind]) ||
+    !ID.test(value.id) ||
+    !ID.test(value.mid) ||
+    value.sid !== binding.sid ||
+    value.epoch !== binding.epoch ||
+    value.kind !== kind ||
+    !Number.isSafeInteger(value.attempt) ||
+    value.attempt < 1 ||
+    !Number.isSafeInteger(value.until) ||
+    value.until <= now
+  )
+    throw new Error("Relay returned an invalid addressed lease");
   let envelope;
-  try { envelope = validateEnvelope({ [kind]: value[kind] }); }
-  catch (error) { throw new Error("Relay returned a malformed addressed message", { cause: error }); }
-  return { id: value.id, mid: value.mid, sid: value.sid, epoch: value.epoch, until: value.until,
-    attempt: value.attempt, kind, message: { [kind]: envelope.data[kind] } };
+  try {
+    envelope = validateEnvelope({ [kind]: value[kind] });
+  } catch (error) {
+    throw new Error("Relay returned a malformed addressed message", { cause: error });
+  }
+  return {
+    id: value.id,
+    mid: value.mid,
+    sid: value.sid,
+    epoch: value.epoch,
+    until: value.until,
+    attempt: value.attempt,
+    kind,
+    message: { [kind]: envelope.data[kind] },
+  };
 }
 
 function nextAt(until, now) {
@@ -74,16 +118,49 @@ function nextAt(until, now) {
 }
 
 function settlementReceipt(value, lease, outcome) {
-  return exact(value, ["epoch", "lease", "mid", "outcome", "sid", "time"])
-    && value.lease === lease.id && value.mid === lease.mid && value.sid === lease.binding.sid
-    && value.epoch === lease.binding.epoch && value.outcome === outcome && Number.isSafeInteger(value.time);
+  return (
+    exact(value, ["epoch", "lease", "mid", "outcome", "sid", "time"]) &&
+    value.lease === lease.id &&
+    value.mid === lease.mid &&
+    value.sid === lease.binding.sid &&
+    value.epoch === lease.binding.epoch &&
+    value.outcome === outcome &&
+    Number.isSafeInteger(value.time)
+  );
 }
 
-export function createRecipientSession({ relayRoot, bindings: initialBindings, bridge, now = Date.now, schedule = setTimeout, cancel = clearTimeout }) {
-  if (typeof relayRoot !== "string" || !relayRoot || relayRoot.includes("\0") || typeof now !== "function"
-    || typeof schedule !== "function" || typeof cancel !== "function") throw new TypeError("Recipient session options are invalid");
+function abortError(reason, message) {
+  return reason instanceof Error ? reason : new Error(message);
+}
+
+function watchAbort(signal, handler) {
+  if (!signal) return () => {};
+  signal.addEventListener("abort", handler, { once: true });
+  if (signal.aborted) handler();
+  return () => signal.removeEventListener("abort", handler);
+}
+
+export function createRecipientSession({
+  relayRoot,
+  bindings: initialBindings,
+  bridge,
+  now = Date.now,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+}) {
+  if (
+    typeof relayRoot !== "string" ||
+    !relayRoot ||
+    relayRoot.includes("\0") ||
+    typeof now !== "function" ||
+    typeof schedule !== "function" ||
+    typeof cancel !== "function"
+  )
+    throw new TypeError("Recipient session options are invalid");
   let bindings = checkedBindings(initialBindings);
-  const send = bridge ?? ((request, signal) => callOpenCodeBridge(relayRoot, "delivery.recipient", request, signal));
+  const send =
+    bridge ??
+    ((request, signal) => callOpenCodeBridge(relayRoot, "delivery.recipient", request, signal));
   if (typeof send !== "function") throw new TypeError("Recipient bridge is invalid");
   const sessions = new Map();
   const leases = new Map();
@@ -99,7 +176,10 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
 
   const enqueue = (task) => {
     const result = serial.then(task, task);
-    serial = result.then(() => undefined, () => undefined);
+    serial = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   };
 
@@ -116,26 +196,28 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
   async function sendBounded(request, callerSignal, { bindToSession = true } = {}) {
     const controller = new AbortController();
     let rejectCancelled;
-    const cancelled = new Promise((_, reject) => { rejectCancelled = reject; });
+    const cancelled = new Promise((_, reject) => {
+      rejectCancelled = reject;
+    });
     let timer = null;
     let settled = false;
     const abort = (reason) => {
       if (settled) return;
-      const error = reason instanceof Error ? reason : new Error("Relay recipient bridge call was cancelled");
+      const error = abortError(reason, "Relay recipient bridge call was cancelled");
       controller.abort(error);
       rejectCancelled(error);
     };
-    const onSessionAbort = () => abort(sessionAbort.signal.reason ?? new Error("Relay recipient session is closing"));
-    const onCallerAbort = () => abort(callerSignal.reason ?? new Error("Relay recipient call was cancelled"));
-    if (bindToSession) {
-      sessionAbort.signal.addEventListener("abort", onSessionAbort, { once: true });
-      if (sessionAbort.signal.aborted) onSessionAbort();
-    }
-    if (callerSignal) {
-      callerSignal.addEventListener("abort", onCallerAbort, { once: true });
-      if (callerSignal.aborted) onCallerAbort();
-    }
-    timer = schedule(() => abort(new Error("Relay recipient bridge call timed out")), BRIDGE_CALL_MS);
+    const onSessionAbort = () =>
+      abort(sessionAbort.signal.reason ?? new Error("Relay recipient session is closing"));
+    const onCallerAbort = () =>
+      abort(callerSignal?.reason ?? new Error("Relay recipient call was cancelled"));
+    const disposers = [];
+    if (bindToSession) disposers.push(watchAbort(sessionAbort.signal, onSessionAbort));
+    disposers.push(watchAbort(callerSignal, onCallerAbort));
+    timer = schedule(
+      () => abort(new Error("Relay recipient bridge call timed out")),
+      BRIDGE_CALL_MS,
+    );
     timer?.unref?.();
     const operation = Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
@@ -150,8 +232,7 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
     } finally {
       settled = true;
       if (timer !== null) cancel(timer);
-      if (bindToSession) sessionAbort.signal.removeEventListener("abort", onSessionAbort);
-      if (callerSignal) callerSignal.removeEventListener("abort", onCallerAbort);
+      for (const dispose of disposers) dispose();
     }
   }
 
@@ -202,17 +283,34 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
     if (!started || closing || lost) return;
     const due = [...sessions.values(), ...leases.values()].map((item) => item.next);
     if (due.length === 0) return;
-    timer = schedule(() => {
-      timer = null;
-      void enqueue(async () => {
-        if (closing || lost) return;
-        const current = now();
-        for (const lease of [...leases.values()]) if (lease.next <= now()) await touch(lease);
-        for (const state of [...sessions.values()]) if (state.next <= current) await renew(state.binding);
-        scheduleMaintenance();
-      }).catch(() => {});
-    }, Math.max(0, Math.min(...due) - now()));
+    timer = schedule(
+      () => {
+        timer = null;
+        void enqueue(() => maintain()).catch(() => {});
+      },
+      Math.max(0, Math.min(...due) - now()),
+    );
     timer?.unref?.();
+  }
+
+  async function maintainDueLeases() {
+    for (const lease of [...leases.values()]) {
+      if (lease.next <= now()) await touch(lease);
+    }
+  }
+
+  async function maintainDueSessions(current) {
+    for (const state of [...sessions.values()]) {
+      if (state.next <= current) await renew(state.binding);
+    }
+  }
+
+  async function maintain() {
+    if (closing || lost) return;
+    const current = now();
+    await maintainDueLeases();
+    await maintainDueSessions(current);
+    scheduleMaintenance();
   }
 
   async function start() {
@@ -243,28 +341,37 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
     }
     claimsThisActivation++;
     for (const binding of bindings) {
-      const value = await call(binding, "claim", { kind }, signal);
-      if (value === null) continue;
-      let lease;
-      try {
-        lease = leaseView(binding, kind, value, now());
-      } catch (error) {
-        uncertain = true;
-        loseOwnership();
-        throw error;
-      }
-      const saved = { ...lease, binding, next: nextAt(lease.until, now()), replied: false };
-      if (leases.has(saved.id)) {
-        uncertain = true;
-        loseOwnership();
-        throw new Error("Relay returned a duplicate lease");
-      }
-      leases.set(saved.id, saved);
+      const saved = await claimFromBinding(binding, kind, signal);
+      if (!saved) continue;
       scheduleMaintenance();
       return { lease: saved.id, kind: saved.kind, message: saved.message };
     }
     scheduleMaintenance();
     return null;
+  }
+
+  function ownedLease(binding, kind, value) {
+    try {
+      return leaseView(binding, kind, value, now());
+    } catch (error) {
+      uncertain = true;
+      loseOwnership();
+      throw error;
+    }
+  }
+
+  async function claimFromBinding(binding, kind, signal) {
+    const value = await call(binding, "claim", { kind }, signal);
+    if (value === null) return null;
+    const lease = ownedLease(binding, kind, value);
+    const saved = { ...lease, binding, next: nextAt(lease.until, now()), replied: false };
+    if (leases.has(saved.id)) {
+      uncertain = true;
+      loseOwnership();
+      throw new Error("Relay returned a duplicate lease");
+    }
+    leases.set(saved.id, saved);
+    return saved;
   }
 
   function activeLease(id) {
@@ -283,10 +390,35 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
     const lease = activeLease(input.lease);
     if (lease.kind !== "msg") throw new Error("Relay replies require an addressed message claim");
     if (lease.replied) throw new Error("A reply was already accepted for this lease");
-    if (typeof input.msg !== "string" || !input.msg || Buffer.byteLength(input.msg, "utf8") > MAX_REPLY_BYTES) throw new TypeError("Relay reply is invalid or too large");
-    const key = `relay-reply-${createHash("sha256").update(JSON.stringify([lease.binding.authority, lease.binding.worker, lease.binding.sid, lease.id, input.msg])).digest("hex")}`;
-    const result = await call(lease.binding, "reply", { lease: lease.id, msg: input.msg, key }, signal);
-    if (!exact(result, ["id", "init", "repeat"]) || !ID.test(result.id) || !Number.isSafeInteger(result.init) || typeof result.repeat !== "boolean") {
+    if (
+      typeof input.msg !== "string" ||
+      !input.msg ||
+      Buffer.byteLength(input.msg, "utf8") > MAX_REPLY_BYTES
+    )
+      throw new TypeError("Relay reply is invalid or too large");
+    const key = `relay-reply-${createHash("sha256")
+      .update(
+        JSON.stringify([
+          lease.binding.authority,
+          lease.binding.worker,
+          lease.binding.sid,
+          lease.id,
+          input.msg,
+        ]),
+      )
+      .digest("hex")}`;
+    const result = await call(
+      lease.binding,
+      "reply",
+      { lease: lease.id, msg: input.msg, key },
+      signal,
+    );
+    if (
+      !exact(result, ["id", "init", "repeat"]) ||
+      !ID.test(result.id) ||
+      !Number.isSafeInteger(result.init) ||
+      typeof result.repeat !== "boolean"
+    ) {
       uncertain = true;
       loseOwnership();
       throw new Error("Relay reply result is invalid");
@@ -311,43 +443,78 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
   }
 
   function invoke(op, input, signal) {
-    return enqueue(async () => {
-      if (!started || closing || lost) throw new Error("Relay ownership is unavailable; recipient processing is stopped");
-      if (signal?.aborted) throw signal.reason ?? new Error("Native tool call was cancelled");
-      if (op === "pending") return readPending(signal);
-      if (op === "claim") return claim(input.kind, signal);
-      if (op === "reply") return reply(input, signal);
-      if (op === "ack" || op === "release") return settle(op, input, signal);
-      throw new TypeError("Unsupported Relay recipient operation");
+    return enqueue(() => {
+      assertUsable(signal);
+      return dispatch(op, input, signal);
     });
   }
 
+  function assertUsable(signal) {
+    if (!started || closing || lost)
+      throw new Error("Relay ownership is unavailable; recipient processing is stopped");
+    if (signal?.aborted) throw signal.reason ?? new Error("Native tool call was cancelled");
+  }
+
+  function dispatch(op, input, signal) {
+    if (op === "pending") return readPending(signal);
+    if (op === "claim") return claim(input.kind, signal);
+    if (op === "reply") return reply(input, signal);
+    if (op === "ack" || op === "release") return settle(op, input, signal);
+    throw new TypeError("Unsupported Relay recipient operation");
+  }
+
   function activationEnded() {
-    return enqueue(() => { if (!closing && !lost) claimsThisActivation = 0; });
+    return enqueue(() => {
+      if (!closing && !lost) claimsThisActivation = 0;
+    });
   }
 
   function rebind(nextBindings) {
     return enqueue(async () => {
       const next = checkedBindings(nextBindings);
-      const previous = new Map(bindings.map((binding) => [binding.id, binding]));
-      if (next.length !== bindings.length || next.some((binding) => {
-        const old = [...previous.values()].find((item) => item.authority === binding.authority && item.worker === binding.worker && item.sid === binding.sid && item.epoch === binding.epoch);
-        return !old;
-      })) throw new Error("Recipient rebind changed the pinned identity");
+      assertSameIdentity(next);
       bindings = next;
       if (uncertain || closing) return false;
       lost = false;
       sessions.clear();
       for (const binding of bindings) await renew(binding);
-      for (const lease of leases.values()) {
-        const replacement = bindings.find((binding) => binding.authority === lease.binding.authority && binding.worker === lease.binding.worker && binding.sid === lease.binding.sid && binding.epoch === lease.binding.epoch);
-        if (!replacement) throw new Error("Active Relay lease lost its pinned binding");
-        lease.binding = replacement;
-        await touch(lease);
-      }
+      await rebindLeases();
       scheduleMaintenance();
       return true;
     });
+  }
+
+  function assertSameIdentity(next) {
+    const previous = new Map(bindings.map((binding) => [binding.id, binding]));
+    if (
+      next.length !== bindings.length ||
+      next.some((binding) => {
+        const old = [...previous.values()].find(
+          (item) =>
+            item.authority === binding.authority &&
+            item.worker === binding.worker &&
+            item.sid === binding.sid &&
+            item.epoch === binding.epoch,
+        );
+        return !old;
+      })
+    )
+      throw new Error("Recipient rebind changed the pinned identity");
+  }
+
+  async function rebindLeases() {
+    for (const lease of leases.values()) {
+      const replacement = bindings.find(
+        (binding) =>
+          binding.authority === lease.binding.authority &&
+          binding.worker === lease.binding.worker &&
+          binding.sid === lease.binding.sid &&
+          binding.epoch === lease.binding.epoch,
+      );
+      if (!replacement) throw new Error("Active Relay lease lost its pinned binding");
+      lease.binding = replacement;
+      await touch(lease);
+    }
   }
 
   function close() {
@@ -357,32 +524,45 @@ export function createRecipientSession({ relayRoot, bindings: initialBindings, b
     sessionAbort.abort(new Error("Relay recipient session is closing"));
     closePromise = (async () => {
       await serial;
-      if (!lost) {
-        for (const lease of [...leases.values()]) {
-          try {
-            const result = await sendBounded({ bindingId: lease.binding.id, op: "release", args: { lease: lease.id } }, undefined, { bindToSession: false });
-            if (!settlementReceipt(result, lease, "released")) {
-              uncertain = true;
-              loseOwnership();
-              break;
-            }
-            leases.delete(lease.id);
-          } catch {
-            uncertain = true;
-            loseOwnership();
-            break;
-          }
-        }
-      }
+      if (!lost) await releaseLeases();
       leases.clear();
       sessions.clear();
     })();
     return closePromise;
   }
 
-  return Object.freeze({ start, invoke, activationEnded, rebind, close, get state() {
-    return Object.freeze({ started, lost, uncertain, activeLeases: leases.size });
-  } });
+  async function releaseLeases() {
+    for (const lease of [...leases.values()]) {
+      try {
+        const result = await sendBounded(
+          { bindingId: lease.binding.id, op: "release", args: { lease: lease.id } },
+          undefined,
+          { bindToSession: false },
+        );
+        if (!settlementReceipt(result, lease, "released")) {
+          uncertain = true;
+          loseOwnership();
+          break;
+        }
+        leases.delete(lease.id);
+      } catch {
+        uncertain = true;
+        loseOwnership();
+        break;
+      }
+    }
+  }
+
+  return Object.freeze({
+    start,
+    invoke,
+    activationEnded,
+    rebind,
+    close,
+    get state() {
+      return Object.freeze({ started, lost, uncertain, activeLeases: leases.size });
+    },
+  });
 }
 
 const leaseSchema = { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" };
@@ -391,13 +571,72 @@ function exactInput(value, keys) {
   return exact(value, keys);
 }
 
+const TOOL_INPUT_KEYS = new Map([
+  ["pending", []],
+  ["claim", ["kind"]],
+  ["reply", ["lease", "msg"]],
+  ["ack", ["lease", "outcome"]],
+  ["release", ["lease"]],
+]);
+
 export function recipientTools(recipient, nativeSession) {
   const definitions = [
-    { name: `${TOOL_PREFIX}pending`, op: "pending", description: "Read addressed Relay message and work counts.", input: { type: "object", properties: {}, required: [], additionalProperties: false } },
-    { name: `${TOOL_PREFIX}claim`, op: "claim", description: "Claim one addressed Relay message or work item.", input: { type: "object", properties: { kind: { type: "string", enum: ["msg", "work"] } }, required: ["kind"], additionalProperties: false } },
-    { name: `${TOOL_PREFIX}reply`, op: "reply", description: "Reply to the sender of an addressed Relay message.", input: { type: "object", properties: { lease: leaseSchema, msg: { type: "string", minLength: 1, maxLength: MAX_REPLY_BYTES } }, required: ["lease", "msg"], additionalProperties: false } },
-    { name: `${TOOL_PREFIX}ack`, op: "ack", description: "Acknowledge an addressed Relay item with an explicit outcome.", input: { type: "object", properties: { lease: leaseSchema, outcome: { type: "string", enum: ["done", "failed", "rejected"] } }, required: ["lease", "outcome"], additionalProperties: false } },
-    { name: `${TOOL_PREFIX}release`, op: "release", description: "Release an addressed Relay item for another attempt.", input: { type: "object", properties: { lease: leaseSchema }, required: ["lease"], additionalProperties: false } },
+    {
+      name: `${TOOL_PREFIX}pending`,
+      op: "pending",
+      description: "Read addressed Relay message and work counts.",
+      input: { type: "object", properties: {}, required: [], additionalProperties: false },
+    },
+    {
+      name: `${TOOL_PREFIX}claim`,
+      op: "claim",
+      description: "Claim one addressed Relay message or work item.",
+      input: {
+        type: "object",
+        properties: { kind: { type: "string", enum: ["msg", "work"] } },
+        required: ["kind"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: `${TOOL_PREFIX}reply`,
+      op: "reply",
+      description: "Reply to the sender of an addressed Relay message.",
+      input: {
+        type: "object",
+        properties: {
+          lease: leaseSchema,
+          msg: { type: "string", minLength: 1, maxLength: MAX_REPLY_BYTES },
+        },
+        required: ["lease", "msg"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: `${TOOL_PREFIX}ack`,
+      op: "ack",
+      description: "Acknowledge an addressed Relay item with an explicit outcome.",
+      input: {
+        type: "object",
+        properties: {
+          lease: leaseSchema,
+          outcome: { type: "string", enum: ["done", "failed", "rejected"] },
+        },
+        required: ["lease", "outcome"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: `${TOOL_PREFIX}release`,
+      op: "release",
+      description: "Release an addressed Relay item for another attempt.",
+      input: {
+        type: "object",
+        properties: { lease: leaseSchema },
+        required: ["lease"],
+        additionalProperties: false,
+      },
+    },
   ];
   return definitions.map((definition) => ({
     name: definition.name,
@@ -405,10 +644,14 @@ export function recipientTools(recipient, nativeSession) {
     input: definition.input,
     options: { permission: definition.name, codemode: false },
     execute: async (input, context) => {
-      const keys = definition.op === "pending" ? [] : definition.op === "claim" ? ["kind"]
-        : definition.op === "reply" ? ["lease", "msg"] : definition.op === "ack" ? ["lease", "outcome"] : ["lease"];
-      if (context?.sessionID !== nativeSession || !(context.signal instanceof AbortSignal) || context.signal.aborted
-        || !exactInput(input, keys)) throw new Error("Relay recipient tool invocation refused");
+      const keys = TOOL_INPUT_KEYS.get(definition.op);
+      if (
+        context?.sessionID !== nativeSession ||
+        !(context.signal instanceof AbortSignal) ||
+        context.signal.aborted ||
+        !exactInput(input, keys)
+      )
+        throw new Error("Relay recipient tool invocation refused");
       const args = { ...input };
       const result = await recipient.invoke(definition.op, args, context.signal);
       return { content: JSON.stringify(result) };
