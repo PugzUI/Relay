@@ -124,6 +124,16 @@ try {
   // below was taken at a width the ladder chose, and the delivered desktop
   // state was never measured. Its document width is checked here, in the
   // state the page is delivered in.
+  // The gate is only meaningful if the element a width-confined defect
+  // would widen is present to be measured: the Dockview overlay host the
+  // product's own stylesheet caps. Without the host a mutant that widens it
+  // is a no-op and the gate would pass on a page that cannot overflow, so
+  // the host's presence is asserted as a positive control before the gate is
+  // trusted.
+  const overlayHostCount = await page.evaluate(
+    () => document.querySelectorAll(".dv-floating-overlay-host").length,
+  );
+  assert.ok(overlayHostCount > 0, "no Dockview overlay host was present on the desktop page");
   const desktopMeasurements = [];
   const desktopOverflow = await measureOverflow(page);
   desktopMeasurements.push({ width: 1500, state: "desktop", ...desktopOverflow });
@@ -236,18 +246,22 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const narrowMeasurements = [];
   const wideMeasurements = [];
-  // The ladder descends across the product's own width branches and samples
-  // the INTERIOR of each branch, not only its edges: the production control
-  // height switches at 760px (ui/style.css:1108) and the prototype layout
-  // switches at 850px (app.mjs:76,513), so the hybrid regime (760,850) and
-  // the desktop band above 850 are reachable only by widths an edge-only
-  // ladder never visits. A defect confined to a WINDOW of widths (a media
-  // query with two bounds) overflows from the window's low edge, so every
-  // boundary is also sampled just above it: 780 sits immediately above the
-  // 760px branch, and 1050 immediately above the 1024px sample. A window
-  // confined to (760,780] or (1024,1050] is invisible to a ladder that
-  // visits only the boundaries.
-  for (const width of [1024, 1050, 800, 780, 760, 600, 390, 320]) {
+  // The ladder NARROWS at every step. The resize direction is the stimulus
+  // for the direction-sensitive defect this harness exists to catch — the
+  // Dockview overlay host keeps the previous, wider inline width when the
+  // viewport narrows — so a ladder that widens at one step measures a
+  // stimulus its own comment does not describe. The widths sampled are the
+  // product's own width branches and the INTERIOR of each branch, not only
+  // its edges: the production control height switches at 760px
+  // (ui/style.css:1108) and the prototype layout switches at 850px
+  // (app.mjs:76,513), so the hybrid regime (760,850) and the desktop band
+  // above 850 are reachable only by widths an edge-only ladder never visits.
+  // A defect confined to a WINDOW of widths (a media query with two bounds)
+  // overflows from the window's low edge, so every boundary is also sampled
+  // just above it: 780 sits immediately above the 760px branch, and 1024
+  // immediately below the 1050px sample, so a window confined to (760,780]
+  // or (1024,1050] is visible to the ladder.
+  for (const width of [1050, 1024, 800, 780, 760, 600, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
@@ -295,10 +309,23 @@ try {
       null,
       { polling: 100 },
     );
-    const coarsePointer = await coarsePage.evaluate(
-      () => window.matchMedia("(pointer: fine)").matches,
+    // The precondition is the branch the rule names, not the negation of a
+    // sibling value: "(pointer: fine)" is false for a coarse pointer AND for
+    // a context with no pointer at all, so asserting only that a fine
+    // pointer is absent admits a "none" context that never matches the
+    // product's (pointer: coarse) disjunct. The coarse branch is asserted
+    // directly, so the population below cannot be measured against a
+    // context in which the rule does not apply.
+    const pointerState = await coarsePage.evaluate(() => ({
+      coarse: window.matchMedia("(pointer: coarse)").matches,
+      fine: window.matchMedia("(pointer: fine)").matches,
+    }));
+    assert.equal(
+      pointerState.coarse,
+      true,
+      "the coarse-pointer page does not report a coarse pointer",
     );
-    assert.equal(coarsePointer, false, "the coarse-pointer page still reports a fine pointer");
+    assert.equal(pointerState.fine, false, "the coarse-pointer page still reports a fine pointer");
     const coarseSizes = await dimensions(coarsePage);
     assert.ok(coarseSizes.length > 0, "no action control was measured on the coarse-pointer page");
     const coarseHeight = await controlHeight(coarsePage);
