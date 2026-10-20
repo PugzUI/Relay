@@ -23,10 +23,12 @@ function run(command, args, options = {}) {
 async function filesUnder(directory) {
   try {
     const entries = await readdir(join(root, directory), { withFileTypes: true });
-    const files = await Promise.all(entries.map(async (entry) => {
-      const path = join(directory, entry.name);
-      return entry.isDirectory() ? filesUnder(path) : [path];
-    }));
+    const files = await Promise.all(
+      entries.map((entry) => {
+        const path = join(directory, entry.name);
+        return entry.isDirectory() ? filesUnder(path) : [path];
+      }),
+    );
     return files.flat();
   } catch (error) {
     if (error.code === "ENOENT") return [];
@@ -46,14 +48,31 @@ for (const path of sourceFiles) {
 }
 console.log(`syntax: checked ${sourceFiles.length} JavaScript module(s)`);
 
-const expectedExports = ["Broker", "Client", "Fault", "LIMITS", "Relay", "connect", "open", "serve", "setup"];
+const expectedExports = [
+  "Broker",
+  "Client",
+  "Fault",
+  "LIMITS",
+  "Relay",
+  "connect",
+  "open",
+  "serve",
+  "setup",
+];
 const entrySource = await readFile(join(root, "src/index.mjs"), "utf8");
 const actualExports = [...entrySource.matchAll(/export\s*\{([^}]+)\}/g)]
   .flatMap((match) => match[1].split(","))
-  .map((name) => name.trim().split(/\s+as\s+/).at(-1))
+  .map((name) =>
+    name
+      .trim()
+      .split(/\s+as\s+/)
+      .at(-1),
+  )
   .sort();
 if (JSON.stringify(actualExports) !== JSON.stringify([...expectedExports].sort())) {
-  failures.push(`exports: expected ${expectedExports.join(", ")}; found ${actualExports.join(", ")}`);
+  failures.push(
+    `exports: expected ${expectedExports.join(", ")}; found ${actualExports.join(", ")}`,
+  );
 } else {
   console.log(`exports: ${actualExports.length} frozen runtime exports`);
 }
@@ -68,7 +87,9 @@ if (failures.every((failure) => !failure.startsWith("declarations:"))) {
   const typeScratch = await mkdtemp(join(root, "node_modules", "relay-types-"));
   try {
     const consumer = join(typeScratch, "consumer.mts");
-    await writeFile(consumer, `import { Broker, Client, Fault, LIMITS, Relay, connect, open, serve, setup } from "@pugzui/relay";
+    await writeFile(
+      consumer,
+      `import { Broker, Client, Fault, LIMITS, Relay, connect, open, serve, setup } from "@pugzui/relay";
 import type { AdmissionReceipt, Agent, BoardId, Device, EnrollmentReceipt, Lease, Message, Page, Session, Snapshot, Stats } from "@pugzui/relay";
 const relay: Relay = open({ root: "./disposable" });
 const inspectOnly: Relay = open({ root: "./existing", readOnly: true });
@@ -92,15 +113,20 @@ client.then((connected) => {
   const remoteEnrollment: Promise<EnrollmentReceipt> = connected.enroll(device);
   void [authority, remoteEnrollment];
 });
-`);
+`,
+    );
     const result = run(process.execPath, [
       compiler,
       "--noEmit",
       "--strict",
-      "--target", "ES2022",
-      "--module", "NodeNext",
-      "--moduleResolution", "NodeNext",
-      "--lib", "ES2022",
+      "--target",
+      "ES2022",
+      "--module",
+      "NodeNext",
+      "--moduleResolution",
+      "NodeNext",
+      "--lib",
+      "ES2022",
       "src/index.d.ts",
       relative(root, consumer),
     ]);
@@ -118,8 +144,18 @@ client.then((connected) => {
 }
 
 const expectedModules = [
-  "src/cli.mjs", "src/fault.mjs", "src/relay.mjs", "src/broker.mjs", "src/client.mjs", "src/validate.mjs",
-  "src/sqlite.mjs", "src/schema.sql", "src/auth.mjs", "src/config.mjs", "src/pool.mjs", "src/feed.mjs",
+  "src/cli.mjs",
+  "src/fault.mjs",
+  "src/relay.mjs",
+  "src/broker.mjs",
+  "src/client.mjs",
+  "src/validate.mjs",
+  "src/sqlite.mjs",
+  "src/schema.sql",
+  "src/auth.mjs",
+  "src/config.mjs",
+  "src/pool.mjs",
+  "src/feed.mjs",
 ];
 const absent = [];
 for (const path of expectedModules) {
@@ -130,7 +166,8 @@ for (const path of expectedModules) {
     else throw error;
   }
 }
-if (absent.length) failures.push(`implementation imports pending from assigned lanes: ${absent.join(", ")}`);
+if (absent.length)
+  failures.push(`implementation imports pending from assigned lanes: ${absent.join(", ")}`);
 else console.log("implementation imports: all contract modules are present");
 
 const packScratch = await mkdtemp(join(tmpdir(), "relay-check-"));
@@ -146,11 +183,20 @@ try {
     try {
       const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
       const output = JSON.parse(pack.stdout);
-      const packages = Array.isArray(output) ? output
-        : output && typeof output === "object" && Object.keys(output).length === 1 && Object.hasOwn(output, manifest.name)
-          ? [output[manifest.name]] : [];
-      if (packages.length !== 1 || packages[0]?.name !== manifest.name || !Array.isArray(packages[0]?.files)
-        || packages[0].entryCount !== packages[0].files.length) {
+      const packages = Array.isArray(output)
+        ? output
+        : output &&
+            typeof output === "object" &&
+            Object.keys(output).length === 1 &&
+            Object.hasOwn(output, manifest.name)
+          ? [output[manifest.name]]
+          : [];
+      if (
+        packages.length !== 1 ||
+        packages[0]?.name !== manifest.name ||
+        !Array.isArray(packages[0]?.files) ||
+        packages[0].entryCount !== packages[0].files.length
+      ) {
         throw new Error("npm returned an invalid package file manifest");
       }
       const packedPaths = packages[0].files.map((file) => {
@@ -158,51 +204,98 @@ try {
         return file.path;
       });
       const forbiddenPaths = packedPaths.filter((path) => {
-        const allowed = ["package.json", "README.md", "LICENSE"].includes(path)
-          || path.startsWith("src/") || path.startsWith("ui/");
-        return !allowed || path.split("/").includes("..")
-          || /(?:^|\/)(?:\.git|\.relay|\.local|node_modules|coverage|tests?|fixtures?)(?:\/|$)/i.test(path)
-          || /(?:^|\/)(?:\.env(?:\.[^/]*)?|token(?:\.(?:txt|json))?|credentials(?:\.json)?|registry\.json)$/i.test(path)
-          || /\.(?:sqlite|db)(?:-[^/]*)?$|\.(?:pem|key|p12|pfx|log|tgz|bak|orig|tmp)$/i.test(path);
+        const allowed =
+          ["package.json", "README.md", "LICENSE"].includes(path) ||
+          path.startsWith("src/") ||
+          path.startsWith("ui/");
+        return (
+          !allowed ||
+          path.split("/").includes("..") ||
+          /(?:^|\/)(?:\.git|\.relay|\.local|node_modules|coverage|tests?|fixtures?)(?:\/|$)/i.test(
+            path,
+          ) ||
+          /(?:^|\/)(?:\.env(?:\.[^/]*)?|token(?:\.(?:txt|json))?|credentials(?:\.json)?|registry\.json)$/i.test(
+            path,
+          ) ||
+          /\.(?:sqlite|db)(?:-[^/]*)?$|\.(?:pem|key|p12|pfx|log|tgz|bak|orig|tmp)$/i.test(path)
+        );
       });
       if (forbiddenPaths.length) {
-        failures.push(`packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`);
+        failures.push(
+          `packaging: unexpected/private package files ${JSON.stringify(forbiddenPaths)}`,
+        );
       }
-      const requiredPacked = ["package.json", "LICENSE", "src/index.mjs", "src/index.d.ts", "src/adapters/package.json",
-        "ui/index.html", "ui/main.mjs", "ui/state.mjs", "ui/filter.mjs", "ui/style.css", "ui/assets/console.mjs", "ui/assets/licenses.txt",
-        "src/adapters/index.mjs", "src/adapters/opencode-plugin-core.mjs", "src/adapters/opencode-bridge.mjs",
-        ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path))];
+      const requiredPacked = [
+        "package.json",
+        "LICENSE",
+        "src/index.mjs",
+        "src/index.d.ts",
+        "src/adapters/package.json",
+        "ui/index.html",
+        "ui/main.mjs",
+        "ui/state.mjs",
+        "ui/filter.mjs",
+        "ui/style.css",
+        "ui/assets/console.mjs",
+        "ui/assets/licenses.txt",
+        "src/adapters/index.mjs",
+        "src/adapters/opencode-plugin-core.mjs",
+        "src/adapters/opencode-bridge.mjs",
+        ...expectedModules.filter((path) => path.startsWith("src/") && !absent.includes(path)),
+      ];
       const missingPacked = requiredPacked.filter((path) => !packedPaths.includes(path));
-      if (missingPacked.length) failures.push(`packaging: missing runtime files ${JSON.stringify(missingPacked)}`);
+      if (missingPacked.length)
+        failures.push(`packaging: missing runtime files ${JSON.stringify(missingPacked)}`);
       const expectedFiles = ["src/", "ui/", "LICENSE"];
       if (JSON.stringify(manifest.files) !== JSON.stringify(expectedFiles)) {
         failures.push(`packaging: files allowlist must be ${expectedFiles.join(", ")}`);
       }
-      if (manifest.name !== "@pugzui/relay" || manifest.engines?.node !== ">=24.0.0" || manifest.license !== "MIT") {
-        failures.push("packaging: package identity, supported Node engine, or license changed from the frozen contract");
+      if (
+        manifest.name !== "@pugzui/relay" ||
+        manifest.engines?.node !== ">=24.0.0" ||
+        manifest.license !== "MIT"
+      ) {
+        failures.push(
+          "packaging: package identity, supported Node engine, or license changed from the frozen contract",
+        );
       }
       for (const script of ["check", "test"]) {
-        if (typeof manifest.scripts?.[script] !== "string") failures.push(`packaging: missing npm script ${script}`);
+        if (typeof manifest.scripts?.[script] !== "string")
+          failures.push(`packaging: missing npm script ${script}`);
       }
       if (Object.keys(manifest.dependencies ?? {}).length !== 0) {
         failures.push("packaging: runtime dependencies must remain empty");
       }
-      const pluginManifest = JSON.parse(await readFile(join(root, "src/adapters/package.json"), "utf8"));
-      if (pluginManifest.name !== "@pugzui/relay-opencode-plugin" || pluginManifest.version !== manifest.version
-        || pluginManifest.private !== true || pluginManifest.type !== "module"
-        || JSON.stringify(pluginManifest.exports) !== JSON.stringify({ ".": "./index.mjs" })
-        || Object.keys(pluginManifest.dependencies ?? {}).length !== 0) {
-        failures.push("packaging: OpenCode directory manifest must select the existing plugin without dependencies");
+      const pluginManifest = JSON.parse(
+        await readFile(join(root, "src/adapters/package.json"), "utf8"),
+      );
+      if (
+        pluginManifest.name !== "@pugzui/relay-opencode-plugin" ||
+        pluginManifest.version !== manifest.version ||
+        pluginManifest.private !== true ||
+        pluginManifest.type !== "module" ||
+        JSON.stringify(pluginManifest.exports) !== JSON.stringify({ ".": "./index.mjs" }) ||
+        Object.keys(pluginManifest.dependencies ?? {}).length !== 0
+      ) {
+        failures.push(
+          "packaging: OpenCode directory manifest must select the existing plugin without dependencies",
+        );
       }
-      if (manifest.exports?.["./opencode-plugin"]?.import !== "./src/adapters/index.mjs"
-        || packedPaths.includes("src/adapters/opencode-plugin.mjs")) {
-        failures.push("packaging: OpenCode imports and directory loading must share one canonical entry");
+      if (
+        manifest.exports?.["./opencode-plugin"]?.import !== "./src/adapters/index.mjs" ||
+        packedPaths.includes("src/adapters/opencode-plugin.mjs")
+      ) {
+        failures.push(
+          "packaging: OpenCode imports and directory loading must share one canonical entry",
+        );
       }
       for (const path of ["package-lock.json", "LICENSE", "src/index.mjs", "src/index.d.ts"]) {
         await stat(join(root, path));
       }
       if (!failures.some((failure) => failure.startsWith("packaging:"))) {
-        console.log(`packaging: validated ${packedPaths.length} emitted file(s), runtime entries, and private-artifact exclusions`);
+        console.log(
+          `packaging: validated ${packedPaths.length} emitted file(s), runtime entries, and private-artifact exclusions`,
+        );
       }
     } catch (error) {
       failures.push(`packaging: manifest/files check failed (${error.message})`);
