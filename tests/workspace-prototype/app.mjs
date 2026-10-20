@@ -95,6 +95,12 @@ class TopologyPanel extends BasePanel {
       connecting: { allowBlank: false },
     });
     graph = this.graph;
+    // X6 stamps the measured size of its container inline. While the dockview
+    // panel is still detached that measurement is 0x0, and an inline 0x0 size
+    // cannot be overridden by the stylesheet, so the graph never paints. Drop
+    // the inline size and let the laid out panel box drive the canvas.
+    this.host.style.removeProperty("width");
+    this.host.style.removeProperty("height");
     this.graph.addNode({
       id: "device",
       shape: "rect",
@@ -138,7 +144,14 @@ class TopologyPanel extends BasePanel {
       } else choose(node.id);
     });
     this.observer = new ResizeObserver(() => {
-      this.graph.resize(this.host.clientWidth, this.host.clientHeight);
+      this.host.style.removeProperty("width");
+      this.host.style.removeProperty("height");
+      const width = this.host.clientWidth;
+      const height = this.host.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      this.graph.resize(width, height);
+      this.host.style.removeProperty("width");
+      this.host.style.removeProperty("height");
       this.fit();
     });
     this.observer.observe(this.host);
