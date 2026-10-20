@@ -31,6 +31,20 @@ const measureOverflow = (target) =>
       offenderRight: offender ? Math.round(offender.rect.right) : null,
     };
   });
+// The product's own control-height rule (ui/style.css:1108) is a
+// disjunction: @media (max-width: 760px), (pointer: coarse) sets
+// --btn-h: var(--touch-min-h), so a control is 44px tall when the viewport
+// is at most 760px wide OR the pointer is coarse, and 36px otherwise
+// (ui/style.css:83-86). The expected height is therefore read from the
+// product's rule and the page's media state, never from a width table: a
+// width table encodes only the width half of the rule and contradicts the
+// product on a coarse pointer. The rule text is fixed here, in the harness,
+// so a change to the stylesheet's own rule is measured against the rule as
+// declared instead of against whatever the stylesheet now says.
+const controlHeight = (target) =>
+  target.evaluate(() =>
+    window.matchMedia("(max-width: 760px), (pointer: coarse)").matches ? 44 : 36,
+  );
 const listener = createServer();
 await new Promise((resolve, reject) => {
   listener.once("error", reject);
@@ -92,8 +106,8 @@ try {
     { polling: 100 },
   );
   workerPids = await page.evaluate(() => workspaceStudy.state.workers.map((w) => w.pid));
-  const dimensions = () =>
-    page.locator(".toolbar button").evaluateAll((nodes) =>
+  const dimensions = (target = page) =>
+    target.locator(".toolbar button").evaluateAll((nodes) =>
       nodes.map((n) => {
         const r = n.getBoundingClientRect();
         return [r.width, r.height];
@@ -101,7 +115,23 @@ try {
     );
   const desktopSizes = await dimensions();
   assert.equal(desktopSizes.length, 6);
-  assert.ok(desktopSizes.every(([w, h]) => w === 96 && h === 36));
+  const desktopHeight = await controlHeight(page);
+  assert.ok(
+    desktopSizes.every(([w, h]) => w === 96 && h === desktopHeight),
+    `desktop action control size at 1500px: expected 96x${desktopHeight}, measured ${JSON.stringify(desktopSizes)}`,
+  );
+  // The functional page itself was never overflow-gated: every measurement
+  // below was taken at a width the ladder chose, and the delivered desktop
+  // state was never measured. Its document width is checked here, in the
+  // state the page is delivered in.
+  const desktopMeasurements = [];
+  const desktopOverflow = await measureOverflow(page);
+  desktopMeasurements.push({ width: 1500, state: "desktop", ...desktopOverflow });
+  assert.equal(
+    desktopOverflow.scrollWidth > desktopOverflow.innerWidth,
+    false,
+    `horizontal overflow at 1500px on the desktop page: scrollWidth ${desktopOverflow.scrollWidth} > innerWidth ${desktopOverflow.innerWidth} (offender ${desktopOverflow.offender ?? "none"} right=${desktopOverflow.offenderRight ?? 0}px)`,
+  );
   const alpha = await page.evaluate(() => workspaceStudy.state.workers[0].id);
   await page.locator(".x6-node").filter({ hasText: "ALPHA" }).click();
   await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1, null, { polling: 100 });
@@ -211,8 +241,13 @@ try {
   // height switches at 760px (ui/style.css:1108) and the prototype layout
   // switches at 850px (app.mjs:76,513), so the hybrid regime (760,850) and
   // the desktop band above 850 are reachable only by widths an edge-only
-  // ladder never visits.
-  for (const width of [1024, 800, 760, 600, 390, 320]) {
+  // ladder never visits. A defect confined to a WINDOW of widths (a media
+  // query with two bounds) overflows from the window's low edge, so every
+  // boundary is also sampled just above it: 780 sits immediately above the
+  // 760px branch, and 1050 immediately above the 1024px sample. A window
+  // confined to (760,780] or (1024,1050] is invisible to a ladder that
+  // visits only the boundaries.
+  for (const width of [1024, 1050, 800, 780, 760, 600, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
@@ -226,16 +261,60 @@ try {
         overflow.innerWidth
       } (offender ${overflow.offender ?? "none"} right=${overflow.offenderRight ?? 0}px)`,
     );
-    // The control height follows the same branch as the product's own rule:
-    // 44px at or below 760px (or on a coarse pointer), 36px above it
-    // (ui/style.css:83-86,1108-1111).
-    const expectedHeight = width <= 760 ? 44 : 36;
+    // The control height follows the product's own rule: 44px when the
+    // viewport is at most 760px wide or the pointer is coarse, 36px above it
+    // (ui/style.css:83-86,1108-1111). The expectation is read from that rule
+    // and the page's media state, not from the width alone.
+    const expectedHeight = await controlHeight(page);
     const sizes = await dimensions();
     assert.ok(sizes.length > 0, `no action control was measured at ${width}px`);
     assert.ok(
       sizes.every(([w, h]) => w === 96 && h === expectedHeight),
       `action control size at ${width}px: expected 96x${expectedHeight}, measured ${JSON.stringify(sizes)}`,
     );
+  }
+  // The pointer half of the product's control-height rule is unreachable from
+  // a fine-pointer context at ANY width, so it is exercised on its own page:
+  // a wide viewport with a coarse pointer, where the rule requires the 44px
+  // touch height even though the width half of the rule does not match. The
+  // pointer type is a property of the context this harness creates, so it is
+  // asserted as a precondition before the product is measured against it.
+  const coarseMeasurements = [];
+  const coarsePage = await browser.newPage({
+    viewport: { width: 1500, height: 1050 },
+    hasTouch: true,
+  });
+  coarsePage.on("pageerror", (error) => errors.push(error.message));
+  coarsePage.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  try {
+    await coarsePage.goto(origin);
+    await coarsePage.waitForFunction(
+      () => window.workspaceStudy?.connected && workspaceStudy.state.workers.every((w) => w.online),
+      null,
+      { polling: 100 },
+    );
+    const coarsePointer = await coarsePage.evaluate(
+      () => window.matchMedia("(pointer: fine)").matches,
+    );
+    assert.equal(coarsePointer, false, "the coarse-pointer page still reports a fine pointer");
+    const coarseSizes = await dimensions(coarsePage);
+    assert.ok(coarseSizes.length > 0, "no action control was measured on the coarse-pointer page");
+    const coarseHeight = await controlHeight(coarsePage);
+    assert.ok(
+      coarseSizes.every(([w, h]) => w === 96 && h === coarseHeight),
+      `coarse-pointer action control size at 1500px: expected 96x${coarseHeight}, measured ${JSON.stringify(coarseSizes)}`,
+    );
+    const coarseOverflow = await measureOverflow(coarsePage);
+    coarseMeasurements.push({ width: 1500, state: "coarse pointer", ...coarseOverflow });
+    assert.equal(
+      coarseOverflow.scrollWidth > coarseOverflow.innerWidth,
+      false,
+      `horizontal overflow at 1500px on the coarse-pointer page: scrollWidth ${coarseOverflow.scrollWidth} > innerWidth ${coarseOverflow.innerWidth} (offender ${coarseOverflow.offender ?? "none"} right=${coarseOverflow.offenderRight ?? 0}px)`,
+    );
+  } finally {
+    await coarsePage.close();
   }
   // The descent above measures the SETTLED state: it waits 150ms after every
   // resize, so the layout re-sync has already rewritten the Dockview overlay
@@ -294,17 +373,24 @@ try {
     committed,
     denied,
     checks: [
-      "96×36 desktop / 96×44 narrow controls",
+      "96×36 desktop controls on a fine pointer / 96×44 narrow and coarse-pointer controls",
+      "1500px desktop page without page overflow",
       "X6 node selection opens one console",
       "real claim / SHA256 / ack and synchronized board",
       "layout save / reset / restore",
       "worker continues during feed disconnect; reconnect has no duplicate ack",
       "shell and unauthenticated commands rejected",
       "760 / 600 / 390 / 320px without page overflow",
-      "1024 / 800px without page overflow",
+      "1024 / 1050 / 800 / 780px without page overflow",
+      "96×44 controls on a coarse pointer at 1500px without page overflow",
       "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
     ],
+    desktopViewport: {
+      measurements: desktopMeasurements.length,
+      overflows: desktopMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
+      results: desktopMeasurements,
+    },
     narrowViewport: {
       measurements: narrowMeasurements.length,
       overflows: narrowMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
@@ -314,6 +400,11 @@ try {
       measurements: wideMeasurements.length,
       overflows: wideMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
       results: wideMeasurements,
+    },
+    coarsePointer: {
+      measurements: coarseMeasurements.length,
+      overflows: coarseMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
+      results: coarseMeasurements,
     },
     evidence,
   };
