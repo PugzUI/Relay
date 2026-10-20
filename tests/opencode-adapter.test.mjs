@@ -33,7 +33,9 @@ function eventStream() {
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         while (!signal.aborted) {
-          const value = queue.length ? queue.shift() : await new Promise((resolve) => waiters.push(resolve));
+          const value = queue.length
+            ? queue.shift()
+            : await new Promise((resolve) => waiters.push(resolve));
           if (value === stop) return;
           yield value;
         }
@@ -65,30 +67,39 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
     root,
     signal: controller.signal,
     onEvidence: (value) => evidence.push(value),
-    bind: async (input) => {
+    bind: (input) => {
       bindings.push(input);
-      return Object.freeze({
-        close: async () => {},
-        observe: async (attemptId, observation) => {
-          observations.push({ attemptId, ...observation });
-          return true;
-        },
-      });
+      return Promise.resolve(
+        Object.freeze({
+          close: () => Promise.resolve(),
+          observe: (attemptId, observation) => {
+            observations.push({ attemptId, ...observation });
+            return Promise.resolve(true);
+          },
+        }),
+      );
     },
   });
   t.after(() => adapter.close());
   assert.equal(statSync(join(root, "opencode-delivery.token")).mode & 0o077, 0);
   assert.equal(statSync(join(root, "opencode-delivery.sock")).mode & 0o077, 0);
   const unauthorizedStatus = await new Promise((resolve, reject) => {
-    const request = httpRequest({
-      socketPath: join(root, "opencode-delivery.sock"),
-      method: "POST",
-      path: "/v1/call",
-      headers: { authorization: `Relay ${"0".repeat(64)}`, "content-type": "application/json", "content-length": "2" },
-    }, (response) => {
-      response.resume();
-      resolve(response.statusCode);
-    });
+    const request = httpRequest(
+      {
+        socketPath: join(root, "opencode-delivery.sock"),
+        method: "POST",
+        path: "/v1/call",
+        headers: {
+          authorization: `Relay ${"0".repeat(64)}`,
+          "content-type": "application/json",
+          "content-length": "2",
+        },
+      },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      },
+    );
     request.once("error", reject);
     request.end("{}");
   });
@@ -102,7 +113,7 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
   const busyWaits = [];
   let failNextPrompt = false;
   const native = {
-    get: async ({ sessionID }) => sessionID === sessionId ? { id: sessionID } : null,
+    get: async ({ sessionID }) => (sessionID === sessionId ? { id: sessionID } : null),
     wait: async ({ sessionID }) => {
       waitCalls++;
       if (sessionID !== sessionId) throw new Error("wrong session");
@@ -110,24 +121,39 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
       if (state === "idle") return;
       await new Promise((resolve) => busyWaits.push(resolve));
     },
-    prompt: async (input) => {
-      if (failNextPrompt) throw new Error("Native prompt failed");
+    prompt: (input) => {
+      if (failNextPrompt) return Promise.reject(new Error("Native prompt failed"));
       prompts.push(input);
-      return { id: input.id };
+      return Promise.resolve({ id: input.id });
     },
-    hook: async (name, callback) => {
+    hook: (name, callback) => {
       hooks.set(name, callback);
-      return () => hooks.delete(name);
+      return Promise.resolve(() => hooks.delete(name));
     },
   };
   const plugin = createOpenCodePlugin();
   assert.equal(nativePlugin.id, "pugzui-relay-delivery");
   assert.equal(typeof nativePlugin.setup, "function");
   const relayBindings = [
-    { authority: "host:relay", worker: "relay-device:opencode:prime", sid: "relay-session-local", epoch: 1 },
-    { authority: "hub:relay", worker: "relay-device:opencode:prime", sid: "relay-session-hub", epoch: 2 },
+    {
+      authority: "host:relay",
+      worker: "relay-device:opencode:prime",
+      sid: "relay-session-local",
+      epoch: 1,
+    },
+    {
+      authority: "hub:relay",
+      worker: "relay-device:opencode:prime",
+      sid: "relay-session-hub",
+      epoch: 2,
+    },
   ];
-  const options = { bindings: relayBindings, nativeSession: sessionId, profile: "default", relayRoot: root };
+  const options = {
+    bindings: relayBindings,
+    nativeSession: sessionId,
+    profile: "default",
+    relayRoot: root,
+  };
   const refusedSetup = await plugin.setup({
     app: { version: "2.0.27" },
     options,
@@ -144,7 +170,11 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
     session: native,
     event: { subscribe: events.subscribe },
   });
-  assert.equal(typeof cleanup, "function", JSON.stringify({ hooks: [...hooks.keys()], bindings: bindings.length, evidence }));
+  assert.equal(
+    typeof cleanup,
+    "function",
+    JSON.stringify({ hooks: [...hooks.keys()], bindings: bindings.length, evidence }),
+  );
   assert.equal(bindings.length, 2);
   assert.equal(bindings[0].consumer, bindings[1].consumer);
   assert.deepEqual(bindings[0].target, bindings[1].target);
@@ -158,7 +188,10 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
     assert.deepEqual(await bindings[0].consumer.status(), { state: "idle" });
 
     const attemptId = "delivery-fixture-01";
-    const admission = await bindings[0].consumer.submit({ attemptId, notice: "Relay pending-state fixture notice" });
+    const admission = await bindings[0].consumer.submit({
+      attemptId,
+      notice: "Relay pending-state fixture notice",
+    });
     assert.equal(admission.accepted, true);
     assert.equal(prompts.length, 1);
     assert.equal(prompts[0].sessionID, sessionId);
@@ -168,11 +201,32 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
     assert.equal(prompts[0].text, "Relay pending-state fixture notice");
 
     hooks.get("context")({ sessionID: sessionId, messages: [{ id: admission.nativeRequestId }] });
-    await waitFor(() => observations.some((item) => item.attemptId === attemptId && item.state === "context_observed"));
-    hooks.get("model.request")({ sessionID: sessionId, kind: "title", agent: "build", model: { providerID: "fixture", id: "fixture" }, headers: {} });
-    assert.equal(observations.some((item) => item.state === "turn_started"), false);
-    hooks.get("model.request")({ sessionID: sessionId, kind: "primary", agent: "build", model: { providerID: "fixture", id: "fixture" }, headers: {} });
-    await waitFor(() => observations.some((item) => item.attemptId === attemptId && item.state === "turn_started"));
+    await waitFor(() =>
+      observations.some(
+        (item) => item.attemptId === attemptId && item.state === "context_observed",
+      ),
+    );
+    hooks.get("model.request")({
+      sessionID: sessionId,
+      kind: "title",
+      agent: "build",
+      model: { providerID: "fixture", id: "fixture" },
+      headers: {},
+    });
+    assert.equal(
+      observations.some((item) => item.state === "turn_started"),
+      false,
+    );
+    hooks.get("model.request")({
+      sessionID: sessionId,
+      kind: "primary",
+      agent: "build",
+      model: { providerID: "fixture", id: "fixture" },
+      headers: {},
+    });
+    await waitFor(() =>
+      observations.some((item) => item.attemptId === attemptId && item.state === "turn_started"),
+    );
     const previousWaitCalls = waitCalls;
     events.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_other_target" } });
     events.emit({ type: "session.step.ended", data: { sessionID: sessionId } });
@@ -181,14 +235,28 @@ test("OpenCode bridge authenticates, shares local/hub bindings, and observes adm
     state = "unknown";
     events.emit({ type: "session.execution.succeeded", data: { sessionID: sessionId } });
     await waitFor(() => waitCalls > previousWaitCalls);
-    assert.equal(observations.some((item) => item.state === "safe_idle"), false);
+    assert.equal(
+      observations.some((item) => item.state === "safe_idle"),
+      false,
+    );
     state = "idle";
     events.emit({ type: "session.execution.succeeded", data: { sessionID: sessionId } });
-    await waitFor(() => observations.some((item) => item.attemptId === attemptId && item.state === "safe_idle"));
-    assert.equal(new Set(observations.filter((item) => item.attemptId === attemptId).map((item) => item.state)).size, 3);
+    await waitFor(() =>
+      observations.some((item) => item.attemptId === attemptId && item.state === "safe_idle"),
+    );
+    assert.equal(
+      new Set(observations.filter((item) => item.attemptId === attemptId).map((item) => item.state))
+        .size,
+      3,
+    );
 
     failNextPrompt = true;
-    await assert.rejects(bindings[0].consumer.submit({ attemptId: "delivery-fixture-failure", notice: "Failure fixture" }));
+    await assert.rejects(
+      bindings[0].consumer.submit({
+        attemptId: "delivery-fixture-failure",
+        notice: "Failure fixture",
+      }),
+    );
     await waitFor(() => evidence.at(-1) === "pending");
     assert.equal(hooks.size, 0);
   } finally {
@@ -210,10 +278,18 @@ test("OpenCode plugin consumes the real supervisor's string notice without expos
   let releaseIdle = () => {};
   t.after(async () => {
     releaseIdle();
-    try { await cleanup?.(); }
-    finally {
-      try { await supervisor?.close(); }
-      finally { try { local?.close(); } finally { rmSync(root, { recursive: true, force: true }); } }
+    try {
+      await cleanup?.();
+    } finally {
+      try {
+        await supervisor?.close();
+      } finally {
+        try {
+          local?.close();
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
     }
   });
   setup({ root, device: "fixture", role: "host" });
@@ -221,26 +297,50 @@ test("OpenCode plugin consumes the real supervisor's string notice without expos
   const owner = claimDeliveryOwner(local);
   const worker = local.register("opencode");
   const session = local.join(worker.id);
-  supervisor = createDeliverySupervisor({ local, hub: null, pool: null, launchConfigured: false,
-    ownerGeneration: owner.generation, clients: ["opencode"], pollMs: 250 });
+  supervisor = createDeliverySupervisor({
+    local,
+    hub: null,
+    pool: null,
+    launchConfigured: false,
+    ownerGeneration: owner.generation,
+    clients: ["opencode"],
+    pollMs: 250,
+  });
   await supervisor.start();
   const prompts = [];
   const events = eventStream();
   const hooks = new Map();
   let nativeBusy = false;
   let idleReads = 0;
-  let nativeIdle = new Promise((resolve) => { releaseIdle = resolve; });
+  let nativeIdle = new Promise((resolve) => {
+    releaseIdle = resolve;
+  });
   cleanup = await createOpenCodePlugin().setup({
     app: { version: "2.0.27" },
-    options: { relayRoot: root, profile: "default", nativeSession,
-      bindings: [{ authority: local.authority, worker: worker.id, sid: session.id, epoch: session.epoch }] },
+    options: {
+      relayRoot: root,
+      profile: "default",
+      nativeSession,
+      bindings: [
+        { authority: local.authority, worker: worker.id, sid: session.id, epoch: session.epoch },
+      ],
+    },
     session: {
       get: async () => ({ id: nativeSession }),
       wait: async () => {
-        if (nativeBusy) { idleReads++; await nativeIdle; }
+        if (nativeBusy) {
+          idleReads++;
+          await nativeIdle;
+        }
       },
-      hook: async (name, callback) => { hooks.set(name, callback); return () => hooks.delete(name); },
-      prompt: async (input) => { prompts.push(input); return { id: input.id }; },
+      hook: (name, callback) => {
+        hooks.set(name, callback);
+        return Promise.resolve(() => hooks.delete(name));
+      },
+      prompt: (input) => {
+        prompts.push(input);
+        return Promise.resolve({ id: input.id });
+      },
     },
     event: { subscribe: events.subscribe },
   });
@@ -248,7 +348,10 @@ test("OpenCode plugin consumes the real supervisor's string notice without expos
   const payload = "Private work body must stay in the authoritative Relay queue";
   local.send(session.id, worker.id, { msg: payload });
   await supervisor.refresh();
-  await waitFor(() => prompts.length === 1, () => JSON.stringify({ prompts: prompts.length, status: supervisor.status() }));
+  await waitFor(
+    () => prompts.length === 1,
+    () => JSON.stringify({ prompts: prompts.length, status: supervisor.status() }),
+  );
   assert.match(prompts[0].text, /^Relay pending state changed\./);
   assert.match(prompts[0].text, /msg=1 work=0/);
   assert.equal(prompts[0].text.includes(payload), false);
@@ -277,14 +380,20 @@ test("OpenCode plugin consumes the real supervisor's string notice without expos
   local.send(session.id, worker.id, { work: "Additional pending work" });
   await supervisor.refresh();
   await waitFor(() => prompts.length === 2);
-  const latest = () => listDeliveryAttempts(local, owner.generation).find((attempt) => attempt.nativeRequestId === prompts[1].id);
+  const latest = () =>
+    listDeliveryAttempts(local, owner.generation).find(
+      (attempt) => attempt.nativeRequestId === prompts[1].id,
+    );
   hooks.get("context")({ sessionID: nativeSession, messages: [{ id: prompts[1].id }] });
   hooks.get("model.request")({ sessionID: nativeSession, kind: "primary" });
-  nativeIdle = new Promise((resolve) => { releaseIdle = resolve; });
+  nativeIdle = new Promise((resolve) => {
+    releaseIdle = resolve;
+  });
   nativeBusy = true;
   events.emit({ type: "session.execution.succeeded", data: { sessionID: nativeSession } });
   await waitFor(() => idleReads === 2);
-  for (let index = 0; index < 5; index++) events.emit({ type: "session.execution.succeeded", data: { sessionID: nativeSession } });
+  for (let index = 0; index < 5; index++)
+    events.emit({ type: "session.execution.succeeded", data: { sessionID: nativeSession } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(idleReads, 2);
   await cleanup();
@@ -301,15 +410,19 @@ test("OpenCode bridge closes a late Relay binding when shutdown races startup", 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   let started;
   let release;
-  const bindingStarted = new Promise((resolve) => { started = resolve; });
-  const pendingBind = new Promise((resolve) => { release = resolve; });
+  const bindingStarted = new Promise((resolve) => {
+    started = resolve;
+  });
+  const pendingBind = new Promise((resolve) => {
+    release = resolve;
+  });
   let closedHandle = false;
   const adapter = await startDeliveryAdapter({
     client: "opencode",
     root,
     signal: new AbortController().signal,
     onEvidence: () => {},
-    bind: async () => {
+    bind: () => {
       started();
       return pendingBind;
     },
@@ -321,12 +434,23 @@ test("OpenCode bridge closes a late Relay binding when shutdown races startup", 
     sid: "relay-session",
     epoch: 1,
     profile: "default",
-    target: { runtimeInstance: "opencode-fixture", profile: "default", nativeSession: sessionId, lifecycleGeneration: "fixture-life" },
+    target: {
+      runtimeInstance: "opencode-fixture",
+      profile: "default",
+      nativeSession: sessionId,
+      lifecycleGeneration: "fixture-life",
+    },
     capabilities: { context: true, idle: true, launch: false },
   });
   await bindingStarted;
   const stopping = adapter.close();
-  release({ close: async () => { closedHandle = true; }, observe: async () => true });
+  release({
+    close: () => {
+      closedHandle = true;
+      return Promise.resolve();
+    },
+    observe: () => Promise.resolve(true),
+  });
   await assert.rejects(request);
   await stopping;
   assert.equal(closedHandle, true);
@@ -338,32 +462,76 @@ test("OpenCode bridge gates recipient forwarding on consume and keeps identity o
   const received = [];
   const controller = new AbortController();
   const adapter = await startDeliveryAdapter({
-    client: "opencode", root, signal: controller.signal, onEvidence: () => {},
-    bind: async (input) => {
-      assert.equal(Object.hasOwn(input, "consume"), false, "adapter-only opt-in is stripped before supervisor bind");
-      return Object.freeze({ close: async () => {}, observe: async () => true,
-        recipient: async (op, args) => { received.push({ op, args }); return { op, args }; } });
+    client: "opencode",
+    root,
+    signal: controller.signal,
+    onEvidence: () => {},
+    bind: (input) => {
+      assert.equal(
+        Object.hasOwn(input, "consume"),
+        false,
+        "adapter-only opt-in is stripped before supervisor bind",
+      );
+      return Promise.resolve(
+        Object.freeze({
+          close: () => Promise.resolve(),
+          observe: () => Promise.resolve(true),
+          recipient: (op, args) => {
+            received.push({ op, args });
+            return Promise.resolve({ op, args });
+          },
+        }),
+      );
     },
   });
   t.after(() => adapter.close());
 
-  const target = { runtimeInstance: "opencode-fixture", profile: "default", nativeSession: sessionId, lifecycleGeneration: "lifecycle-fixture" };
-  const base = { authority: "host:relay", worker: "relay-device:opencode:prime", sid: "relay-session-fixture", epoch: 4,
-    profile: "default", target, capabilities: { context: true, idle: true, launch: false } };
+  const target = {
+    runtimeInstance: "opencode-fixture",
+    profile: "default",
+    nativeSession: sessionId,
+    lifecycleGeneration: "lifecycle-fixture",
+  };
+  const base = {
+    authority: "host:relay",
+    worker: "relay-device:opencode:prime",
+    sid: "relay-session-fixture",
+    epoch: 4,
+    profile: "default",
+    target,
+    capabilities: { context: true, idle: true, launch: false },
+  };
   const consuming = await callOpenCodeBridge(root, "delivery.bind", { ...base, consume: true });
   const noticeOnly = await callOpenCodeBridge(root, "delivery.bind", base);
 
   const forwarded = await callOpenCodeBridge(root, "delivery.recipient", {
-    bindingId: consuming.bindingId, op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" },
+    bindingId: consuming.bindingId,
+    op: "reply",
+    args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" },
   });
-  assert.deepEqual(forwarded, { op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" } });
-  assert.deepEqual(received, [{ op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" } }]);
-  await assert.rejects(callOpenCodeBridge(root, "delivery.recipient", {
-    bindingId: noticeOnly.bindingId, op: "pending", args: {},
-  }), /rejected/);
-  await assert.rejects(callOpenCodeBridge(root, "delivery.recipient", {
-    bindingId: consuming.bindingId, op: "claim", args: { kind: "work", sid: "forged" },
-  }), /rejected/);
+  assert.deepEqual(forwarded, {
+    op: "reply",
+    args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" },
+  });
+  assert.deepEqual(received, [
+    { op: "reply", args: { lease: "lease_fixture", msg: "response", key: "fixed-session-key" } },
+  ]);
+  await assert.rejects(
+    callOpenCodeBridge(root, "delivery.recipient", {
+      bindingId: noticeOnly.bindingId,
+      op: "pending",
+      args: {},
+    }),
+    /rejected/,
+  );
+  await assert.rejects(
+    callOpenCodeBridge(root, "delivery.recipient", {
+      bindingId: consuming.bindingId,
+      op: "claim",
+      args: { kind: "work", sid: "forged" },
+    }),
+    /rejected/,
+  );
 
   await callOpenCodeBridge(root, "delivery.close", { bindingId: consuming.bindingId });
   await callOpenCodeBridge(root, "delivery.close", { bindingId: noticeOnly.bindingId });
@@ -387,26 +555,52 @@ test("OpenCode status and cleanup stay bounded when SDK reads ignore abort", asy
   };
   t.after(async () => {
     idle();
-    try { await cleanup?.(); }
-    finally { try { await adapter?.close(); } finally { rmSync(root, { recursive: true, force: true }); } }
+    try {
+      await cleanup?.();
+    } finally {
+      try {
+        await adapter?.close();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
   });
   adapter = await startDeliveryAdapter({
-    client: "opencode", root, signal: new AbortController().signal, onEvidence: () => {},
-    bind: async (input) => {
+    client: "opencode",
+    root,
+    signal: new AbortController().signal,
+    onEvidence: () => {},
+    bind: (input) => {
       bindings.push(input);
-      return { close: async () => {}, observe: async () => true };
+      return Promise.resolve({
+        close: () => Promise.resolve(),
+        observe: () => Promise.resolve(true),
+      });
     },
   });
   cleanup = await createOpenCodePlugin().setup({
     app: { version: "2.0.27" },
-    options: { relayRoot: root, profile: "default", nativeSession: sessionId,
-      bindings: [{ authority: "host:fixture", worker: "fixture-device:opencode:prime", sid: "relay-session", epoch: 1 }] },
+    options: {
+      relayRoot: root,
+      profile: "default",
+      nativeSession: sessionId,
+      bindings: [
+        {
+          authority: "host:fixture",
+          worker: "fixture-device:opencode:prime",
+          sid: "relay-session",
+          epoch: 1,
+        },
+      ],
+    },
     session: {
       get: async () => {
         if (blockRead) await new Promise((resolve) => reads.push(resolve));
         return { id: sessionId };
       },
-      wait: async () => { if (state !== "idle") await new Promise((resolve) => waits.push(resolve)); },
+      wait: async () => {
+        if (state !== "idle") await new Promise((resolve) => waits.push(resolve));
+      },
       hook: async () => ({ dispose: async () => {} }),
       prompt: async (input) => ({ id: input.id }),
     },
@@ -416,10 +610,18 @@ test("OpenCode status and cleanup stay bounded when SDK reads ignore abort", asy
   const boundedStatus = async (timeoutMs = 1000) => {
     let timer;
     try {
-      return await Promise.race([bindings[0].consumer.status(), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("Status did not settle within the native observation bound")), timeoutMs);
-      })]);
-    } finally { clearTimeout(timer); }
+      return await Promise.race([
+        bindings[0].consumer.status(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Status did not settle within the native observation bound")),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
   assert.deepEqual(await boundedStatus(), { state: "busy" });
   assert.deepEqual(await boundedStatus(), { state: "busy" });
@@ -441,47 +643,87 @@ test("OpenCode status and cleanup stay bounded when SDK reads ignore abort", asy
   await waitFor(() => waits.length === 2);
   let timer;
   try {
-    await Promise.race([cleanup(), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Cleanup awaited an uncancellable SDK read")), 1000);
-    })]);
-  } finally { clearTimeout(timer); }
+    await Promise.race([
+      cleanup(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Cleanup awaited an uncancellable SDK read")),
+          1000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
   await disconnected;
 });
 
+const FREE_PROVIDER_FAILURES = [
+  "none",
+  "hook-setup",
+  "retry-dispose",
+  "rollback-dispose",
+  "both-dispose",
+];
+
+function freeProviderFixture(failure) {
+  const calls = [];
+  const hookError = new Error("retry hook failed");
+  const providerError = new Error("provider disposal failed");
+  const setupFails = failure === "hook-setup" || failure === "rollback-dispose";
+  const providerDispose = () => {
+    calls.push("provider");
+    if (failure === "rollback-dispose" || failure === "both-dispose")
+      return Promise.reject(providerError);
+    return Promise.resolve();
+  };
+  const retryDispose = () => {
+    calls.push("retry");
+    if (failure === "retry-dispose" || failure === "both-dispose") return Promise.reject(hookError);
+    return Promise.resolve();
+  };
+  const ctx = {
+    options: {
+      baseURL: "http://127.0.0.1:8080/v1",
+      route: "openrouter/free",
+      contextTokens: 2048,
+      outputTokens: 1024,
+    },
+    provider: { transform: () => Promise.resolve({ dispose: providerDispose }) },
+    session: {
+      hook: () =>
+        setupFails ? Promise.reject(hookError) : Promise.resolve({ dispose: retryDispose }),
+    },
+  };
+  return { calls, ctx, hookError, providerError, setupFails };
+}
+
+function isAggregate(error, first, second) {
+  return error instanceof AggregateError && error.errors[0] === first && error.errors[1] === second;
+}
+
 test("free inference helper disposes SDK registrations and rolls back failed setup", async (t) => {
-  for (const failure of ["none", "hook-setup", "retry-dispose", "rollback-dispose", "both-dispose"]) {
+  for (const failure of FREE_PROVIDER_FAILURES) {
     await t.test(failure, async () => {
-      const calls = [];
-      const hookError = new Error("retry hook failed");
-      const providerError = new Error("provider disposal failed");
-      const setupFails = failure === "hook-setup" || failure === "rollback-dispose";
-      const ctx = {
-        options: { baseURL: "http://127.0.0.1:8080/v1", route: "openrouter/free", contextTokens: 2048, outputTokens: 1024 },
-        provider: { transform: async () => ({ dispose: async () => {
-          calls.push("provider");
-          if (failure === "rollback-dispose" || failure === "both-dispose") throw providerError;
-        } }) },
-        session: { hook: async () => {
-          if (setupFails) throw hookError;
-          return { dispose: async () => {
-            calls.push("retry");
-            if (failure === "retry-dispose" || failure === "both-dispose") throw hookError;
-          } };
-        } },
-      };
+      const { calls, ctx, hookError, providerError, setupFails } = freeProviderFixture(failure);
       if (setupFails) {
-        await assert.rejects(freeProvider.setup(ctx), (error) => failure === "rollback-dispose"
-          ? error instanceof AggregateError && error.errors[0] === hookError && error.errors[1] === providerError
-          : error === hookError);
+        await assert.rejects(freeProvider.setup(ctx), (error) =>
+          failure === "rollback-dispose"
+            ? isAggregate(error, hookError, providerError)
+            : error === hookError,
+        );
         assert.deepEqual(calls, ["provider"]);
-      } else {
-        const cleanup = await freeProvider.setup(ctx);
-        if (failure === "both-dispose") await assert.rejects(cleanup(), (error) => error instanceof AggregateError
-          && error.errors[0] === hookError && error.errors[1] === providerError);
-        else if (failure === "retry-dispose") await assert.rejects(cleanup(), (error) => error === hookError);
-        else await cleanup();
-        assert.deepEqual(calls, ["retry", "provider"]);
+        return;
       }
+      const cleanup = await freeProvider.setup(ctx);
+      if (failure === "both-dispose") {
+        await assert.rejects(cleanup(), (error) => isAggregate(error, hookError, providerError));
+      } else if (failure === "retry-dispose") {
+        await assert.rejects(cleanup(), (error) => error === hookError);
+      } else {
+        await cleanup();
+      }
+      assert.deepEqual(calls, ["retry", "provider"]);
     });
   }
 });
