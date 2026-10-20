@@ -15,14 +15,23 @@ test("message inspection does not grant board metadata or body access", (t) => {
   relay.post(session.id, "bounty", { work: { task: "private board work" } });
   const authorization = {
     scopeKey: "a".repeat(64),
-    principal: { id: "message-inspector", grant: {
-      workers: [], inboxRead: [], workRead: [], inspect: { messages: true },
-    } },
+    principal: {
+      id: "message-inspector",
+      grant: {
+        workers: [],
+        inboxRead: [],
+        workRead: [],
+        inspect: { messages: true },
+      },
+    },
   };
   for (const data of [false, true]) {
     const page = relay.list({ data }, authorization);
     assert.equal(page.total, 1);
-    assert.deepEqual(page.items.map((item) => item.id), [addressed.id]);
+    assert.deepEqual(
+      page.items.map((item) => item.id),
+      [addressed.id],
+    );
     for (const kind of ["msg", "work"]) {
       const board = relay.list({ board: "bounty", kind, data }, authorization);
       assert.equal(board.total, 0);
