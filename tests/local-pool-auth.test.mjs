@@ -13,18 +13,33 @@ test("A56 trusted local Pool can settle a network-owned current session without 
     principal: { id: "network-owner", grant: { workers: [worker.id] } },
   };
   const session = dispatchRpc(relay, {
-    authorization, rid: "join-network-owner", op: "join", args: { worker: worker.id }, beforeCommit() {},
+    authorization,
+    rid: "join-network-owner",
+    op: "join",
+    args: { worker: worker.id },
+    beforeCommit() {},
   }).result;
   const board = `host:${relay.device.id}`;
   const admission = relay.post(session.id, board, { work: { task: "local-controller" } });
   const args = { sid: session.id, options: { board } };
-  assert.throws(() => dispatchRpc(relay, {
-    authorization: {
-      operation: "claim", scopeKey: "b".repeat(64),
-      principal: { id: `local:${relay.authority}`, grant: { workers: [worker.id], boardClaim: [board] } },
-    },
-    rid: "forged-local-name", op: "claim", args, beforeCommit() {},
-  }), { code: "denied" });
+  assert.throws(
+    () =>
+      dispatchRpc(relay, {
+        authorization: {
+          operation: "claim",
+          scopeKey: "b".repeat(64),
+          principal: {
+            id: `local:${relay.authority}`,
+            grant: { workers: [worker.id], boardClaim: [board] },
+          },
+        },
+        rid: "forged-local-name",
+        op: "claim",
+        args,
+        beforeCommit() {},
+      }),
+    { code: "denied" },
+  );
   const claim = dispatchLocalPool(relay, { rid: "local-claim", op: "claim", args });
   assert.equal(claim.result.mid, admission.id);
   const replay = dispatchLocalPool(relay, { rid: "local-claim", op: "claim", args });
@@ -33,5 +48,8 @@ test("A56 trusted local Pool can settle a network-owned current session without 
   const settlement = { sid: session.id, lease: claim.result.id, outcome: "done" };
   const ack = dispatchLocalPool(relay, { rid: "local-ack", op: "ack", args: settlement });
   assert.equal(ack.result.outcome, "done");
-  assert.deepEqual(dispatchLocalPool(relay, { rid: "local-ack", op: "ack", args: settlement }).result, ack.result);
+  assert.deepEqual(
+    dispatchLocalPool(relay, { rid: "local-ack", op: "ack", args: settlement }).result,
+    ack.result,
+  );
 });
