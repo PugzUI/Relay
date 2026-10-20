@@ -205,7 +205,7 @@ try {
   await malformed.body.cancel();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const narrowMeasurements = [];
-  for (const width of [760, 390, 320]) {
+  for (const width of [760, 600, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
@@ -283,7 +283,7 @@ try {
       "layout save / reset / restore",
       "worker continues during feed disconnect; reconnect has no duplicate ack",
       "shell and unauthenticated commands rejected",
-      "760 / 390 / 320px without page overflow",
+      "760 / 600 / 390 / 320px without page overflow",
       "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
     ],
