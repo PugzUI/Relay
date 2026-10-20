@@ -5,5 +5,8 @@ const started = Date.now();
 while (Date.now() - started < 100) {}
 const agent = relay.register("allocator");
 const lease = relay.claim(process.env.RELAY_SID);
-process.send({ slot: agent.slot, lease: lease ? { id: lease.id, until: lease.until, mid: lease.mid } : null });
+process.send({
+  slot: agent.slot,
+  lease: lease ? { id: lease.id, until: lease.until, mid: lease.mid } : null,
+});
 relay.close();
