@@ -235,6 +235,15 @@ const stripStringContents = (source) =>
     .replace(/'(?:[^'\\]|\\.)*'/g, "''")
     .replace(/`(?:[^`\\]|\\.)*`/g, "``");
 
+/**
+ * The stripper behind M4: the comments are removed correctly, but the CONTENTS of every
+ * string literal are emptied. The file stays parseable, so this defect is invisible to a
+ * check that only asks "does the stripped output still parse" - the case list is what
+ * catches it. Exported so the reach of the corpus sweep can be MEASURED against the same
+ * mutant the case list is measured against.
+ */
+export const stripsStringContents = (source) => stripStringContents(scanSource(source, FULL));
+
 export const mutants = {
   // M1: naive line-comment stripper - cuts from the first `//` to end of line, anywhere,
   // including inside a string literal.
@@ -260,7 +269,7 @@ export const mutants = {
   // M4: strips string CONTENTS as well as comments - hides differences inside literals.
   M4: {
     label: "strips string contents",
-    comparePair: makeComparator((source) => stripStringContents(scanSource(source, FULL))),
+    comparePair: makeComparator(stripsStringContents),
   },
   // M5: strips comments naively AND string contents.
   M5: {

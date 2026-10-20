@@ -116,8 +116,14 @@ test("liveness: every mutant comparator is caught by the case list", async (t) =
   for (const [id, mutant] of entries) {
     const results = await evaluateAll(mutant.comparePair);
     const caught = results.filter((result) => !result.ok).map((result) => result.id);
+    // THE REACH OF EACH CHECK IS MEASURED, NOT ASSUMED: the same mutant is run through
+    // the shape list as well, and the shapes that catch it are named. A mutant that a
+    // check does not catch is invisible to that check, which is not the same as being
+    // harmless to the product.
+    const shapeResults = await runShapes(mutant.comparePair);
+    const shapesCaught = shapeResults.filter((result) => !result.ok).map((result) => result.id);
     t.diagnostic(
-      `mutant ${id} (${mutant.label}): ${caught.length}/${results.length} cases caught (${caught.join(", ") || "none"})`,
+      `mutant ${id} (${mutant.label}): ${caught.length}/${results.length} cases caught (${caught.join(", ") || "none"}), ${shapesCaught.length}/${shapeResults.length} shapes caught (${shapesCaught.join(", ") || "none"})`,
     );
     if (caught.length === 0) uncaught.push(id);
   }

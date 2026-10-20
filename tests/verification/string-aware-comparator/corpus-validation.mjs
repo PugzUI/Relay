@@ -47,6 +47,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { comparePair, stripCommentsStringAware } from "./string-aware-comparator.mjs";
 import { evaluateCase } from "./acceptance-cases.mjs";
+import { stripsStringContents } from "./mutant-comparators.mjs";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 
@@ -350,15 +351,22 @@ export const shapes = [
   ],
 ];
 
-/** Run the adversarial shapes through the module's own case evaluator. */
-export async function runShapes() {
+/**
+ * Run the adversarial shapes through the module's own case evaluator. The comparator is a
+ * parameter, so the REACH of the shape list can be measured: the same shapes are run
+ * against a mutant comparator, and the shapes that catch it are named.
+ */
+export async function runShapes(comparator = comparePair) {
   const results = [];
-  for (const shape of shapes) results.push(await evaluateCase(comparePair, shape));
+  for (const shape of shapes) results.push(await evaluateCase(comparator, shape));
   return results;
 }
 
 export function reportCorpus(result) {
   console.log(`population: ${result.population}, ${result.expected} JavaScript file(s)`);
+  console.log(
+    "the check: every file's comment-stripped output must still parse - this sweep sees parse-breaking damage only, a defect that leaves the file parseable is invisible to it",
+  );
   console.log(`source files expected: ${result.expected}`);
   console.log(`source files processed: ${result.processed}`);
   console.log(`transform failures: ${result.failed.length}`);
@@ -437,7 +445,27 @@ async function selfTest() {
   console.log(
     `SELF-TEST 2: the comparator under test mis-lexes a nested template inside an interpolation: ${misLexed ? "YES (defect)" : "no"}`,
   );
-  return detected.bad.length > 0 && detected.failed.length === 0 && !misLexed;
+
+  // THE REACH OF THE CORPUS CHECK, MEASURED AGAINST A SECOND DEFECT CLASS. The check of
+  // this sweep is a PARSE check - the comment-stripped output must still parse - so it
+  // sees a defect only where the damage breaks the syntax. A comparator that empties
+  // string contents is caught by the case list in 6 cases, and by this sweep only in the
+  // files whose emptied contents break the syntax. The reach of the sweep is therefore
+  // bounded by the parse check, and the case list is the check that covers a semantic
+  // defect. The number is reported, not asserted: it moves with the population.
+  const semantic = corruptedFiles(sourcePopulation(), stripsStringContents);
+  console.log(
+    `SELF-TEST 3: the sweep reports ${semantic.bad.length} file(s) for a comparator that empties string contents - the check is a PARSE check, so a semantic defect is invisible to it unless the damage breaks the syntax`,
+  );
+  for (const failure of semantic.failed) {
+    console.log(`   FAILED ${failure.file}: ${failure.error}`);
+  }
+  return (
+    detected.bad.length > 0 &&
+    detected.failed.length === 0 &&
+    !misLexed &&
+    semantic.failed.length === 0
+  );
 }
 
 // The script runs only when it is invoked directly; importing it exposes the detection
