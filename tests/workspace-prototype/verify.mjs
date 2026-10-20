@@ -205,12 +205,20 @@ try {
   await malformed.body.cancel();
   await page.emulateMedia({ reducedMotion: "reduce" });
   const narrowMeasurements = [];
-  for (const width of [760, 600, 390, 320]) {
+  const wideMeasurements = [];
+  // The ladder descends across the product's own width branches and samples
+  // the INTERIOR of each branch, not only its edges: the production control
+  // height switches at 760px (ui/style.css:1108) and the prototype layout
+  // switches at 850px (app.mjs:76,513), so the hybrid regime (760,850) and
+  // the desktop band above 850 are reachable only by widths an edge-only
+  // ladder never visits.
+  for (const width of [1024, 800, 760, 600, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
     const overflow = await measureOverflow(page);
-    narrowMeasurements.push({ width, state: "settled", ...overflow });
+    const measurement = { width, state: "settled", ...overflow };
+    (width <= 760 ? narrowMeasurements : wideMeasurements).push(measurement);
     assert.equal(
       overflow.scrollWidth > overflow.innerWidth,
       false,
@@ -218,7 +226,16 @@ try {
         overflow.innerWidth
       } (offender ${overflow.offender ?? "none"} right=${overflow.offenderRight ?? 0}px)`,
     );
-    assert.ok((await dimensions()).every(([w, h]) => w === 96 && h === 44));
+    // The control height follows the same branch as the product's own rule:
+    // 44px at or below 760px (or on a coarse pointer), 36px above it
+    // (ui/style.css:83-86,1108-1111).
+    const expectedHeight = width <= 760 ? 44 : 36;
+    const sizes = await dimensions();
+    assert.ok(sizes.length > 0, `no action control was measured at ${width}px`);
+    assert.ok(
+      sizes.every(([w, h]) => w === 96 && h === expectedHeight),
+      `action control size at ${width}px: expected 96x${expectedHeight}, measured ${JSON.stringify(sizes)}`,
+    );
   }
   // The descent above measures the SETTLED state: it waits 150ms after every
   // resize, so the layout re-sync has already rewritten the Dockview overlay
@@ -284,6 +301,7 @@ try {
       "worker continues during feed disconnect; reconnect has no duplicate ack",
       "shell and unauthenticated commands rejected",
       "760 / 600 / 390 / 320px without page overflow",
+      "1024 / 800px without page overflow",
       "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
     ],
@@ -291,6 +309,11 @@ try {
       measurements: narrowMeasurements.length,
       overflows: narrowMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
       results: narrowMeasurements,
+    },
+    wideViewport: {
+      measurements: wideMeasurements.length,
+      overflows: wideMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
+      results: wideMeasurements,
     },
     evidence,
   };
