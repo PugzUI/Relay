@@ -12,12 +12,21 @@ test("malformed UTF-8 token files return the stable input fault before connectin
   try {
     const tokenFile = join(root, "token");
     await writeFile(tokenFile, Buffer.from([0xff]), { mode: 0o600 });
-    await assert.rejects(connect({ url: "https://127.0.0.1:1", tokenFile }), (error) =>
-      error instanceof Fault && error.code === "input" && error.message === "Token file has invalid contents");
-  } finally { await rm(root, { recursive: true, force: true }); }
+    await assert.rejects(
+      connect({ url: "https://127.0.0.1:1", tokenFile }),
+      (error) =>
+        error instanceof Fault &&
+        error.code === "input" &&
+        error.message === "Token file has invalid contents",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
-test("client and capture token readers reject a writerless FIFO without blocking", { skip: process.platform === "win32" }, async (t) => {
+test("client and capture token readers reject a writerless FIFO without blocking", {
+  skip: process.platform === "win32",
+}, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "relay-fifo-test-"));
   const fifo = join(root, "token-fifo");
   try {
@@ -38,9 +47,15 @@ test("client and capture token readers reject a writerless FIFO without blocking
       }
       process.stdout.write(JSON.stringify(outcomes));
     `;
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script, clientUrl, captureUrl, fifo], {
-      encoding: "utf8", timeout: 3000, maxBuffer: 1024,
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script, clientUrl, captureUrl, fifo],
+      {
+        encoding: "utf8",
+        timeout: 3000,
+        maxBuffer: 1024,
+      },
+    );
     if (result.error?.code === "EPERM") {
       t.skip("sandbox does not permit the bounded subprocess regression");
       return;
