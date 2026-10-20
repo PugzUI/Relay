@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRegistry, loadRegistrySync } from "../src/auth.mjs";
 
-test("both registry readers reject writerless FIFOs without blocking", { skip: process.platform === "win32" }, async (t) => {
+test("both registry readers reject writerless FIFOs without blocking", {
+  skip: process.platform === "win32",
+}, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "relay-registry-fifo-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const fifo = join(root, "credentials.json");
@@ -21,8 +23,11 @@ test("both registry readers reject writerless FIFOs without blocking", { skip: p
     }
     process.stdout.write(JSON.stringify(results));
   `;
-  const result = spawnSync(process.execPath, ["--input-type=module", "-e", code,
-    new URL("../src/auth.mjs", import.meta.url).href, fifo], { encoding: "utf8", timeout: 3000, maxBuffer: 2048 });
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", code, new URL("../src/auth.mjs", import.meta.url).href, fifo],
+    { encoding: "utf8", timeout: 3000, maxBuffer: 2048 },
+  );
   assert.equal(result.error, undefined, result.error?.message);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), ["unavailable", "unavailable"]);
