@@ -60,10 +60,14 @@ function requestController(pane) {
     paneControllers.get(pane)?.abort();
     paneControllers.set(pane, controller);
   }
-  controller.signal.addEventListener("abort", () => {
-    requestControllers.delete(controller);
-    if (paneControllers.get(pane) === controller) paneControllers.delete(pane);
-  }, { once: true });
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      requestControllers.delete(controller);
+      if (paneControllers.get(pane) === controller) paneControllers.delete(pane);
+    },
+    { once: true },
+  );
   return controller;
 }
 
@@ -92,9 +96,39 @@ function safeHttpError(status) {
   return { code: "http", label: `Request failed (${status})` };
 }
 
+function contentType(response) {
+  return response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+}
+
+function linkAbortSignal(signal, controller) {
+  if (!signal) return null;
+  if (signal.aborted) {
+    controller.abort();
+    return null;
+  }
+  const listener = () => controller.abort();
+  signal.addEventListener("abort", listener, { once: true });
+  return listener;
+}
+
+async function responseFailure(response, controller, type, pane) {
+  const failure = safeHttpError(response.status);
+  if (response.status === 503 && !pane && type === "application/json") {
+    const value = JSON.parse(await readBounded(response, controller));
+    if (value?.v === 1 && value.fault?.code === "reset") {
+      failure.code = "reset";
+      failure.label = "Topology changed";
+    }
+  }
+  const error = new Error(failure.label);
+  error.code = failure.code;
+  return error;
+}
+
 async function readBounded(response, controller) {
   const header = response.headers.get("content-length");
-  if (header !== null && (!/^\d+$/.test(header) || Number(header) > MAX_RESPONSE_BYTES)) throw new Error("Response limit exceeded");
+  if (header !== null && (!/^\d+$/.test(header) || Number(header) > MAX_RESPONSE_BYTES))
+    throw new Error("Response limit exceeded");
   if (!response.body) throw new Error("Response body unavailable");
   const reader = response.body.getReader();
   const chunks = [];
@@ -116,7 +150,10 @@ async function readBounded(response, controller) {
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
@@ -148,16 +185,29 @@ function handleAuthFault(error, token) {
   setConnection("error", error.code === "auth" ? "Authentication required" : "Denied");
 }
 
+function requestFailure(error, controller, signal, pane, token, timedOut) {
+  if (error?.name === "AbortError") {
+    if (!timedOut) return error;
+    const timeout = new Error("Request timed out");
+    timeout.code = "timeout";
+    return timeout;
+  }
+  controller.abort();
+  if (!signal?.aborted && (error?.code === "auth" || (error?.code === "denied" && !pane))) {
+    handleAuthFault(error, token);
+  }
+  return error;
+}
+
 async function requestJson(path, { signal, pane } = {}) {
   const token = state.token;
   const controller = requestController(pane);
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_DEADLINE_MS);
-  const abortListener = signal ? () => controller.abort() : null;
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", abortListener, { once: true });
-  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_DEADLINE_MS);
+  const abortListener = linkAbortSignal(signal, controller);
   try {
     const response = await fetch(path, {
       method: "GET",
@@ -168,34 +218,12 @@ async function requestJson(path, { signal, pane } = {}) {
       redirect: "error",
       signal: controller.signal,
     });
-    const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-    if (!response.ok) {
-      const failure = safeHttpError(response.status);
-      if (response.status === 503 && !pane && type === "application/json") {
-        const value = JSON.parse(await readBounded(response, controller));
-        if (value?.v === 1 && value.fault?.code === "reset") {
-          failure.code = "reset";
-          failure.label = "Topology changed";
-        }
-      }
-      const error = new Error(failure.label);
-      error.code = failure.code;
-      throw error;
-    }
+    const type = contentType(response);
+    if (!response.ok) throw await responseFailure(response, controller, type, pane);
     if (type !== "application/json") throw new Error("Invalid response type");
     return JSON.parse(await readBounded(response, controller));
   } catch (error) {
-    if (error?.name === "AbortError") {
-      if (timedOut) {
-        const timeout = new Error("Request timed out");
-        timeout.code = "timeout";
-        throw timeout;
-      }
-      throw error;
-    }
-    controller.abort();
-    if (!signal?.aborted && (error?.code === "auth" || (error?.code === "denied" && !pane))) handleAuthFault(error, token);
-    throw error;
+    throw requestFailure(error, controller, signal, pane, token, timedOut);
   } finally {
     clearTimeout(timer);
     if (signal && abortListener) signal.removeEventListener("abort", abortListener);
@@ -204,24 +232,33 @@ async function requestJson(path, { signal, pane } = {}) {
   }
 }
 
+async function loadSnapshotPage(signal, after) {
+  const url = new URL("/v1/topology", location.origin);
+  url.searchParams.set("limit", "512");
+  if (after) url.searchParams.set("after", after);
+  return parseSnapshot(await requestJson(`${url.pathname}${url.search}`, { signal }));
+}
+
+async function collectSnapshot(signal) {
+  const pages = [];
+  let after = null;
+  for (let pageNo = 0; pageNo < 32; pageNo += 1) {
+    if (signal.aborted) throw new DOMException("Snapshot cancelled", "AbortError");
+    const page = await loadSnapshotPage(signal, after);
+    pages.push(page);
+    if (page.complete) return mergeSnapshotPages(pages);
+    after = page.next;
+  }
+  throw new Error("Topology page limit exceeded");
+}
+
 async function loadSnapshot(signal) {
   for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
-    const pages = [];
-    let after = null;
     try {
-      for (let pageNo = 0; pageNo < 32; pageNo += 1) {
-        if (signal.aborted) throw new DOMException("Snapshot cancelled", "AbortError");
-        const url = new URL("/v1/topology", location.origin);
-        url.searchParams.set("limit", "512");
-        if (after) url.searchParams.set("after", after);
-        const page = parseSnapshot(await requestJson(`${url.pathname}${url.search}`, { signal }));
-        pages.push(page);
-        if (page.complete) return mergeSnapshotPages(pages);
-        after = page.next;
-      }
-      throw new Error("Topology page limit exceeded");
+      return await collectSnapshot(signal);
     } catch (error) {
-      if (error.code !== "reset" || signal.aborted || attempt === MAX_SNAPSHOT_ATTEMPTS - 1) throw error;
+      if (error.code !== "reset" || signal.aborted || attempt === MAX_SNAPSHOT_ATTEMPTS - 1)
+        throw error;
     }
   }
 }
@@ -247,34 +284,57 @@ function renderViews() {
   const summary = byId("filter-summary");
   if (!query.trim() || !snapshot) summary.textContent = "";
   else {
-    const matches = filteredTopology(snapshot, query, (device) => deviceStatus(device, snapshot)).counts;
+    const matches = filteredTopology(snapshot, query, (device) =>
+      deviceStatus(device, snapshot),
+    ).counts;
     const quantity = (amount, label) => `${amount} ${label}${amount === 1 ? "" : "s"}`;
-    summary.textContent = [quantity(matches.devices, "device"), quantity(matches.workers, "worker"), quantity(matches.boards, "board")].join(" · ");
+    summary.textContent = [
+      quantity(matches.devices, "device"),
+      quantity(matches.workers, "worker"),
+      quantity(matches.boards, "board"),
+    ].join(" · ");
   }
 }
 
 function deviceStatus(device, snapshot) {
-  return device.authority === snapshot.authority || (!device.stale && device.receivedAt !== null
-    && device.receivedAt <= snapshot.time && snapshot.time - device.receivedAt <= 30_000) ? "registered" : "stale";
+  return device.authority === snapshot.authority ||
+    (!device.stale &&
+      device.receivedAt !== null &&
+      device.receivedAt <= snapshot.time &&
+      snapshot.time - device.receivedAt <= 30_000)
+    ? "registered"
+    : "stale";
 }
 
 function drawTopology(snapshot = state.snapshot) {
   state.pulses = state.pulses.filter((pulse) => pulse.until > Date.now());
-  const entities = [...(snapshot?.devices ?? []), ...(snapshot?.agents ?? []), ...(snapshot?.boards ?? [])];
-  if (state.selectedNode && !entities.some((row) => row.id === state.selectedNode)) state.selectedNode = null;
+  const entities = [
+    ...(snapshot?.devices ?? []),
+    ...(snapshot?.agents ?? []),
+    ...(snapshot?.boards ?? []),
+  ];
+  if (state.selectedNode && !entities.some((row) => row.id === state.selectedNode))
+    state.selectedNode = null;
   renderViews();
   if (!snapshot) return;
   const suggestions = byId("node-filter-options");
   const options = filterSuggestions(snapshot, (device) => deviceStatus(device, snapshot));
-  if (JSON.stringify(options) !== JSON.stringify([...suggestions.options].map((option) => option.value))) {
-    suggestions.replaceChildren(...options.map((value) => {
-      const option = document.createElement("option");
-      option.value = value;
-      return option;
-    }));
+  if (
+    JSON.stringify(options) !==
+    JSON.stringify([...suggestions.options].map((option) => option.value))
+  ) {
+    suggestions.replaceChildren(
+      ...options.map((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        return option;
+      }),
+    );
   }
   const ids = snapshot.boards.map((board) => board.id);
-  if (JSON.stringify(ids) !== JSON.stringify([...boardPicker.children].map((option) => option.value))) {
+  if (
+    JSON.stringify(ids) !== JSON.stringify([...boardPicker.children].map((option) => option.value))
+  ) {
     boardPicker.replaceChildren();
     for (const board of snapshot.boards) {
       const option = document.createElement("option");
@@ -292,7 +352,11 @@ function drawTopology(snapshot = state.snapshot) {
 function chooseBoard(board) {
   if (board !== null && !state.snapshot?.boards.some((entry) => entry.id === board)) return;
   cancelPaneRequests();
-  try { selectBoard(state, board); } catch { return; }
+  try {
+    selectBoard(state, board);
+  } catch {
+    return;
+  }
   state.selectedNode = board;
   boardPicker.value = board;
   drawTopology();
@@ -349,120 +413,206 @@ function paneLabel(page) {
   return `${page.visible} visible / ${page.total} total${clipping}${pruned}`;
 }
 
-function renderPane(name) {
-  const pane = state[name];
-  const page = pane.page;
-  const rows = byId(`${name}-rows`);
-  if (!state.selectedBoard) return clearPane(name);
+function renderPaneStatus(name, pane, page) {
   const status = byId(`${name}-status`);
   status.dataset.state = "";
   if (pane.loading) status.textContent = "Loading";
-  else if (pane.error) { status.textContent = pane.error; status.dataset.state = "error"; }
-  else if (page && state.connection !== "connected") {
+  else if (pane.error) {
+    status.textContent = pane.error;
+    status.dataset.state = "error";
+  } else if (page && state.connection !== "connected") {
     status.textContent = `${connectionNode.textContent} · cached`;
     status.dataset.state = state.connection === "error" ? "error" : "";
-  }
-  else if (page?.items.length === 0) status.textContent = "Empty";
+  } else if (page?.items.length === 0) status.textContent = "Empty";
   else if (page) status.textContent = "Ready";
   else status.textContent = "Not loaded";
+}
+
+function recordText(row, name) {
+  if (name === "inbox") return row.data?.msg;
+  if (row.data?.work === undefined) return undefined;
+  return JSON.stringify(row.data.work, null, 2);
+}
+
+function recordMetadata(row, name) {
+  if (name === "inbox") return `seq ${row.seq} · ${timeLabel(row.init)}`;
+  const needs = row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none";
+  const series = row.series ? ` · series ${row.series}` : "";
+  return `seq ${row.seq} · ${needs}${series} · ${timeLabel(row.init)}`;
+}
+
+async function copyRecordId(row, item, copy) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(row.id);
+    if (item.dataset.mid === row.id) copy.textContent = "Copied";
+  } catch {
+    if (item.dataset.mid === row.id) copy.textContent = "Unavailable";
+  }
+}
+
+function buildRecord(item, row, name, text) {
+  const header = node("div", "record-head");
+  const copy = node("button", "record-copy", "Copy");
+  copy.type = "button";
+  copy.setAttribute("aria-label", `Copy record ID ${row.id}`);
+  copy.addEventListener("click", copyRecordId.bind(null, row, item, copy));
+  const current = node("span", "record-state", row.state);
+  current.dataset.state = row.state;
+  header.append(
+    node("span", "record-kind", name === "inbox" ? "MSG" : "WORK"),
+    node("span", "record-id", row.id),
+    current,
+    copy,
+  );
+  item.replaceChildren(header);
+  if (text !== undefined) item.append(node("pre", "record-text", text));
+  const meta = node("div", "record-meta");
+  meta.append(
+    node("span", "record-seq", `seq ${row.seq}`),
+    node("span", "record-time", timeLabel(row.init)),
+  );
+  if (name === "bounties") {
+    meta.append(
+      node(
+        "span",
+        "record-needs",
+        row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none",
+      ),
+    );
+    if (row.series) meta.append(node("span", "record-series", `series ${row.series}`));
+  }
+  item.append(meta);
+}
+
+function renderPaneRows(name, page) {
+  const rows = byId(`${name}-rows`);
+  const existing = new Map([...rows.children].map((item) => [item.dataset.mid, item]));
+  const retained = new Set();
+  let anchor = rows.firstChild;
+  for (const row of page.items) {
+    const item = existing.get(row.id) ?? node("li", "record");
+    item.dataset.mid = row.id;
+    const text = recordText(row, name);
+    const metadata = recordMetadata(row, name);
+    const signature = JSON.stringify([row.id, row.state, text, metadata]);
+    if (recordSignatures.get(item) !== signature) {
+      buildRecord(item, row, name, text);
+      recordSignatures.set(item, signature);
+    }
+    retained.add(item);
+    if (item === anchor) anchor = anchor.nextSibling;
+    else rows.insertBefore(item, anchor);
+  }
+  for (const item of [...rows.children]) if (!retained.has(item)) item.remove();
+}
+
+function renderPane(name) {
+  const pane = state[name];
+  const page = pane.page;
+  if (!state.selectedBoard) return clearPane(name);
+  renderPaneStatus(name, pane, page);
   if (page) {
     byId(`${name}-count`).textContent = paneLabel(page);
-    const existing = new Map([...rows.children].map((item) => [item.dataset.mid, item]));
-    const retained = new Set();
-    let anchor = rows.firstChild;
-    for (const row of page.items) {
-      const item = existing.get(row.id) ?? node("li", "record");
-      item.dataset.mid = row.id;
-      const text = name === "inbox" ? row.data?.msg : row.data?.work === undefined ? undefined : JSON.stringify(row.data.work, null, 2);
-      const metadata = name === "inbox"
-        ? `seq ${row.seq} · ${timeLabel(row.init)}`
-        : `seq ${row.seq} · ${row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none"}${row.series ? ` · series ${row.series}` : ""} · ${timeLabel(row.init)}`;
-      const signature = JSON.stringify([row.id, row.state, text, metadata]);
-      if (recordSignatures.get(item) !== signature) {
-        const header = node("div", "record-head");
-        const copy = node("button", "record-copy", "Copy");
-        copy.type = "button";
-        copy.setAttribute("aria-label", `Copy record ID ${row.id}`);
-        copy.addEventListener("click", async () => {
-          try {
-            if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-            await navigator.clipboard.writeText(row.id);
-            if (item.dataset.mid === row.id) copy.textContent = "Copied";
-          } catch {
-            if (item.dataset.mid === row.id) copy.textContent = "Unavailable";
-          }
-        });
-        const current = node("span", "record-state", row.state);
-        current.dataset.state = row.state;
-        header.append(node("span", "record-kind", name === "inbox" ? "MSG" : "WORK"), node("span", "record-id", row.id), current, copy);
-        item.replaceChildren(header);
-        if (text !== undefined) item.append(node("pre", "record-text", text));
-        const meta = node("div", "record-meta");
-        meta.append(node("span", "record-seq", `seq ${row.seq}`), node("span", "record-time", timeLabel(row.init)));
-        if (name === "bounties") {
-          meta.append(node("span", "record-needs", row.needs.length ? `needs ${row.needs.join(", ")}` : "needs none"));
-          if (row.series) meta.append(node("span", "record-series", `series ${row.series}`));
-        }
-        item.append(meta);
-        recordSignatures.set(item, signature);
-      }
-      retained.add(item);
-      if (item === anchor) anchor = anchor.nextSibling;
-      else rows.insertBefore(item, anchor);
-    }
-    for (const item of [...rows.children]) if (!retained.has(item)) item.remove();
+    renderPaneRows(name, page);
   } else {
-    rows.replaceChildren();
+    byId(`${name}-rows`).replaceChildren();
     byId(`${name}-count`).textContent = "";
   }
   byId(`${name}-prev`).disabled = pane.loading || pane.pageIndex <= 0;
   byId(`${name}-next`).disabled = pane.loading || !page || page.complete;
-  byId(`${name}-page`).textContent = pane.pageIndex >= 0 ? `Page ${pane.pageBase + pane.pageIndex + 1}` : "";
+  byId(`${name}-page`).textContent =
+    pane.pageIndex >= 0 ? `Page ${pane.pageBase + pane.pageIndex + 1}` : "";
+}
+
+function paneErrorLabel(error) {
+  if (error.code === "unavailable") return "Unavailable";
+  if (error.code === "denied") return "Denied";
+  if (error.code === "auth") return "Authentication required";
+  if (error.code === "timeout") return "Timed out";
+  if (error.message === "Failed to fetch") return "Offline";
+  return "Invalid response";
+}
+
+function storePanePage(pane, page, reuse) {
+  if (reuse) {
+    pane.pages[pane.pageIndex] = page;
+  } else {
+    pane.pages = pane.pages.slice(0, pane.pageIndex + 1);
+    pane.pages.push(page);
+    pane.pageIndex = pane.pages.length - 1;
+    if (pane.pages.length > 20) {
+      pane.pages.shift();
+      pane.pageIndex -= 1;
+      pane.pageBase += 1;
+    }
+  }
+  pane.page = page;
+}
+
+function failPane(name, pane, error, generation) {
+  if (error.name === "AbortError") return;
+  if (generation !== pane.generation) return;
+  if (error.code === "denied") {
+    if (!denyPane(state, name, generation)) return;
+    renderPane(name);
+    return;
+  }
+  pane.error = paneErrorLabel(error);
+}
+
+function paneKind(name) {
+  return name === "inbox" ? "msg" : "work";
+}
+
+function paneBoardAuthority(board) {
+  if (state.boardAuthority !== null && state.boardAuthority !== undefined) {
+    return state.boardAuthority;
+  }
+  if (!board) return null;
+  if (board.reported && board.authority === state.snapshot.authority) return null;
+  return board.authority;
+}
+
+function paneRequestAllowed(selectedBoard, board) {
+  return Boolean(state.token && selectedBoard && board);
+}
+
+function paneRequestCurrent(pane, generation, selectedBoard) {
+  return (
+    generation === pane.generation && selectedBoard === state.selectedBoard && Boolean(state.token)
+  );
+}
+
+function panePageUrl(name, selectedBoard, after) {
+  const url = new URL("/v1/board", location.origin);
+  url.searchParams.set("board", selectedBoard);
+  url.searchParams.set("kind", paneKind(name));
+  url.searchParams.set("limit", String(PAGE_SIZE));
+  url.searchParams.set("data", "1");
+  if (after) url.searchParams.set("after", after);
+  return `${url.pathname}${url.search}`;
 }
 
 async function loadPane(name, after, reuse = false) {
   const pane = state[name];
   const selectedBoard = state.selectedBoard;
   const board = state.snapshot?.boards.find((item) => item.id === selectedBoard);
-  const boardAuthority = state.boardAuthority ?? (board && (!board.reported || board.authority !== state.snapshot.authority) ? board.authority : null);
-  if (!state.token || !selectedBoard || !board) return;
+  const boardAuthority = paneBoardAuthority(board);
+  if (!paneRequestAllowed(selectedBoard, board)) return;
   const generation = ++pane.generation;
   pane.loading = true;
   pane.error = null;
   renderPane(name);
-  const url = new URL("/v1/board", location.origin);
-  url.searchParams.set("board", selectedBoard);
-  url.searchParams.set("kind", name === "inbox" ? "msg" : "work");
-  url.searchParams.set("limit", String(PAGE_SIZE));
-  url.searchParams.set("data", "1");
-  if (after) url.searchParams.set("after", after);
+  const url = panePageUrl(name, selectedBoard, after);
   try {
-    const raw = await requestJson(`${url.pathname}${url.search}`, { pane: name });
-    const parsed = parseBoardPage(raw, selectedBoard, name === "inbox" ? "msg" : "work", boardAuthority);
-    if (generation !== pane.generation || selectedBoard !== state.selectedBoard || !state.token) return;
+    const raw = await requestJson(url, { pane: name });
+    const parsed = parseBoardPage(raw, selectedBoard, paneKind(name), boardAuthority);
+    if (!paneRequestCurrent(pane, generation, selectedBoard)) return;
     bindBoardAuthority(state, parsed.authority);
-    const page = parsed.page;
-    if (reuse) pane.pages[pane.pageIndex] = page;
-    else {
-      pane.pages = pane.pages.slice(0, pane.pageIndex + 1);
-      pane.pages.push(page);
-      pane.pageIndex = pane.pages.length - 1;
-      if (pane.pages.length > 20) {
-        pane.pages.shift();
-        pane.pageIndex -= 1;
-        pane.pageBase += 1;
-      }
-    }
-    pane.page = page;
+    storePanePage(pane, parsed.page, reuse);
   } catch (error) {
-    if (error.name === "AbortError") return;
-    if (generation !== pane.generation) return;
-    if (error.code === "denied") {
-      if (!denyPane(state, name, generation)) return;
-      renderPane(name);
-      return;
-    }
-    pane.error = error.code === "unavailable" ? "Unavailable" : error.code === "denied" ? "Denied" : error.code === "auth" ? "Authentication required" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid response";
+    failPane(name, pane, error, generation);
   } finally {
     if (generation === pane.generation) {
       pane.loading = false;
@@ -482,6 +632,66 @@ function navigatePane(name, direction) {
   } else if (pane.page?.next) loadPane(name, pane.page.next);
 }
 
+function snapshotBoundaryChanged(previous, snapshot) {
+  if (!previous) return false;
+  return (
+    previous.authority !== snapshot.authority || !sameFeedBoundary(previous.cursor, snapshot.cursor)
+  );
+}
+
+function retireStaleSelection() {
+  stopStream();
+  cancelPaneRequests();
+  selectBoard(state, null);
+  state.selectedNode = null;
+  state.pulses = [];
+}
+
+function applySnapshotSelection(snapshot) {
+  if (state.selectedBoard && snapshot.boards.some((board) => board.id === state.selectedBoard)) {
+    return false;
+  }
+  const preferred =
+    snapshot.boards.find((board) => board.kind === "bounty")?.id ?? snapshot.boards[0]?.id ?? null;
+  if (preferred === state.selectedBoard) return false;
+  cancelPaneRequests();
+  selectBoard(state, preferred);
+  if (!state.selectedNode) state.selectedNode = preferred;
+  return true;
+}
+
+function snapshotErrorLabel(error) {
+  if (error.code === "reset") return "Topology changed";
+  if (error.code === "unavailable") return "Unavailable";
+  if (error.code === "timeout") return "Timed out";
+  if (error.message === "Failed to fetch") return "Offline";
+  return "Invalid topology";
+}
+
+function reportSnapshotFailure(error, token, controller, generation) {
+  if (error.name === "AbortError") return false;
+  if (error.code === "auth" || error.code === "denied") return false;
+  if (
+    state.token !== token ||
+    controller.signal.aborted ||
+    generation !== snapshotGeneration ||
+    pageHidden
+  ) {
+    return false;
+  }
+  setConnection("error", snapshotErrorLabel(error));
+  statusNode.dataset.state = "error";
+  return false;
+}
+
+function scheduleFreshnessRefresh(token, generation) {
+  if (generation !== snapshotGeneration) return;
+  clearTimeout(freshnessTimer);
+  if (state.token === token && !pageHidden) {
+    freshnessTimer = setTimeout(() => refreshSnapshot(), 10_000);
+  }
+}
+
 async function refreshSnapshot(refreshBoardPages = false) {
   if (!state.token || pageHidden) return false;
   const token = state.token;
@@ -492,25 +702,12 @@ async function refreshSnapshot(refreshBoardPages = false) {
   const generation = ++snapshotGeneration;
   try {
     const snapshot = await loadSnapshot(controller.signal);
-    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration) return false;
-    if (state.snapshot && (state.snapshot.authority !== snapshot.authority || !sameFeedBoundary(state.snapshot.cursor, snapshot.cursor))) {
-      stopStream();
-      cancelPaneRequests();
-      selectBoard(state, null);
-      state.selectedNode = null;
-      state.pulses = [];
+    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration) {
+      return false;
     }
+    if (snapshotBoundaryChanged(state.snapshot, snapshot)) retireStaleSelection();
     state.snapshot = snapshot;
-    let selectedChanged = false;
-    if (!state.selectedBoard || !snapshot.boards.some((board) => board.id === state.selectedBoard)) {
-      const preferred = snapshot.boards.find((board) => board.kind === "bounty")?.id ?? snapshot.boards[0]?.id ?? null;
-      if (preferred !== state.selectedBoard) {
-        cancelPaneRequests();
-        selectBoard(state, preferred);
-        if (!state.selectedNode) state.selectedNode = preferred;
-        selectedChanged = true;
-      }
-    }
+    const selectedChanged = applySnapshotSelection(snapshot);
     drawTopology(snapshot);
     setConnection("connected", "Connected");
     if (state.selectedBoard && (selectedChanged || !wasConnected || refreshBoardPages)) {
@@ -519,18 +716,11 @@ async function refreshSnapshot(refreshBoardPages = false) {
     connectStream();
     return true;
   } catch (error) {
-    if (error.name === "AbortError") return false;
-    if (error.code === "auth" || error.code === "denied") return false;
-    if (state.token !== token || controller.signal.aborted || generation !== snapshotGeneration || pageHidden) return false;
-    setConnection("error", error.code === "reset" ? "Topology changed" : error.code === "unavailable" ? "Unavailable" : error.code === "timeout" ? "Timed out" : error.message === "Failed to fetch" ? "Offline" : "Invalid topology");
-    statusNode.dataset.state = "error";
+    reportSnapshotFailure(error, token, controller, generation);
   } finally {
     requestControllers.delete(controller);
     if (snapshotController === controller) snapshotController = null;
-    if (generation === snapshotGeneration) {
-      clearTimeout(freshnessTimer);
-      if (state.token === token && !pageHidden) freshnessTimer = setTimeout(() => refreshSnapshot(), 10_000);
-    }
+    scheduleFreshnessRefresh(token, generation);
   }
   return false;
 }
@@ -552,7 +742,12 @@ function refreshPanes() {
   for (const name of ["inbox", "bounties"]) {
     const pane = state[name];
     if (pane.pageIndex < 0) loadPane(name, null);
-    else loadPane(name, pane.pageIndex === 0 ? null : pane.pages[pane.pageIndex - 1]?.next ?? null, true);
+    else
+      loadPane(
+        name,
+        pane.pageIndex === 0 ? null : (pane.pages[pane.pageIndex - 1]?.next ?? null),
+        true,
+      );
   }
 }
 
@@ -574,7 +769,10 @@ async function readEventStream(response, signal, onFrame) {
 
 function waitForReconnect(delay, signal) {
   return new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
     const done = () => {
       clearTimeout(timer);
       signal.removeEventListener("abort", done);
@@ -592,93 +790,150 @@ function stopStream() {
   streamTask = null;
 }
 
-async function connectStream() {
+function nextReconnectDelay(delay) {
+  return Math.min(delay * 2, 10_000);
+}
+
+function streamFailureLabel(error, timedOut) {
+  if (timedOut) return "Timed out · reconnecting";
+  if (error.message === "Failed to fetch") return "Offline · reconnecting";
+  return "Reconnecting";
+}
+
+function streamStale(generation, token, controller) {
+  return (
+    generation !== streamGeneration ||
+    state.token !== token ||
+    pageHidden ||
+    controller.signal.aborted
+  );
+}
+
+function applyStreamFrame(frame, token, generation, controller) {
+  if (streamStale(generation, token, controller) || !state.snapshot) return;
+  if (frame.event === "reset") {
+    resetForResync();
+    throw new Error("Feed reset");
+  }
+  if (frame.event !== "delta") return;
+  if (commitPulse(state, frame)) {
+    drawTopology();
+    schedulePulseExpiry();
+  }
+  state.snapshot.cursor = frame.cursor;
+  scheduleRefresh();
+  schedulePaneRefresh();
+}
+
+async function streamHandshakeError(response) {
+  const failure = safeHttpError(response.status);
+  const error = new Error(failure.label);
+  error.code = failure.code;
+  try {
+    await response.body?.cancel();
+  } catch (cause) {
+    error.cause = cause;
+  }
+  return error;
+}
+
+async function streamFailure(error, token, controller, generation, timedOut, delay) {
+  if (generation !== streamGeneration) return { stop: true, delay, needsSnapshot: false };
+  if (controller.signal.aborted && (!state.token || pageHidden)) {
+    return { stop: true, delay, needsSnapshot: false };
+  }
+  if (error.code === "auth" || error.code === "denied") {
+    handleAuthFault(error, token);
+    return { stop: true, delay, needsSnapshot: false };
+  }
+  setConnection(
+    timedOut || error.code === "unavailable" ? "error" : "disconnected",
+    streamFailureLabel(error, timedOut),
+  );
+  await waitForReconnect(delay, controller.signal);
+  return { stop: false, delay: nextReconnectDelay(delay), needsSnapshot: true };
+}
+
+async function streamAttempt(token, generation, needsSnapshot, delay) {
+  const controller = new AbortController();
+  const fetchController = new AbortController();
+  const abortFetch = () => fetchController.abort();
+  let headerTimer = null;
+  let timedOut = false;
+  streamController = controller;
+  try {
+    if (needsSnapshot && !(await refreshSnapshot())) {
+      await waitForReconnect(delay, controller.signal);
+      return { stop: false, delay: nextReconnectDelay(delay), needsSnapshot: true };
+    }
+    if (streamStale(generation, token, controller)) {
+      return { stop: true, delay, needsSnapshot: false };
+    }
+    const url = new URL("/v1/events", location.origin);
+    url.searchParams.set("cursor", state.snapshot.cursor);
+    controller.signal.addEventListener("abort", abortFetch, { once: true });
+    headerTimer = setTimeout(() => {
+      timedOut = true;
+      fetchController.abort();
+    }, REQUEST_DEADLINE_MS);
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      credentials: "omit",
+      cache: "no-store",
+      mode: "same-origin",
+      redirect: "error",
+      signal: fetchController.signal,
+    });
+    clearTimeout(headerTimer);
+    if (timedOut) {
+      await response.body?.cancel();
+      throw new Error("Event stream handshake timed out");
+    }
+    if (streamStale(generation, token, controller)) {
+      await response.body?.cancel();
+      return { stop: true, delay, needsSnapshot: false };
+    }
+    if (!response.ok) throw await streamHandshakeError(response);
+    setConnection("connected", "Connected");
+    delay = 500;
+    await readEventStream(response, controller.signal, (frame) =>
+      applyStreamFrame(frame, token, generation, controller),
+    );
+    if (!controller.signal.aborted) {
+      setConnection("disconnected", "Reconnecting");
+      await waitForReconnect(delay, controller.signal);
+      return { stop: false, delay: nextReconnectDelay(delay), needsSnapshot: true };
+    }
+    return { stop: false, delay, needsSnapshot: false };
+  } catch (error) {
+    const outcome = await streamFailure(error, token, controller, generation, timedOut, delay);
+    return outcome;
+  } finally {
+    clearTimeout(headerTimer);
+    controller.signal.removeEventListener("abort", abortFetch);
+    if (streamController === controller) streamController = null;
+  }
+}
+
+async function runEventStream(token, generation) {
+  let delay = 500;
+  let needsSnapshot = false;
+  while (state.token === token && !pageHidden && generation === streamGeneration) {
+    const result = await streamAttempt(token, generation, needsSnapshot, delay);
+    if (result.stop) break;
+    delay = result.delay;
+    needsSnapshot = result.needsSnapshot;
+  }
+}
+
+function connectStream() {
   if (!state.token || !state.snapshot || pageHidden || streamTask) return;
   const token = state.token;
   const generation = ++streamGeneration;
-  streamTask = (async () => {
-    let delay = 500;
-    let needsSnapshot = false;
-    while (state.token === token && !pageHidden && generation === streamGeneration) {
-      const controller = new AbortController();
-      const fetchController = new AbortController();
-      const abortFetch = () => fetchController.abort();
-      let headerTimer = null;
-      let timedOut = false;
-      streamController = controller;
-      try {
-        if (needsSnapshot && !await refreshSnapshot()) {
-          await waitForReconnect(delay, controller.signal);
-          delay = Math.min(delay * 2, 10_000);
-          continue;
-        }
-        needsSnapshot = false;
-        if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted) break;
-        const url = new URL("/v1/events", location.origin);
-        url.searchParams.set("cursor", state.snapshot.cursor);
-        controller.signal.addEventListener("abort", abortFetch, { once: true });
-        headerTimer = setTimeout(() => { timedOut = true; fetchController.abort(); }, REQUEST_DEADLINE_MS);
-        const response = await fetch(`${url.pathname}${url.search}`, {
-          method: "GET",
-          headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
-          credentials: "omit", cache: "no-store", mode: "same-origin", redirect: "error", signal: fetchController.signal,
-        });
-        clearTimeout(headerTimer);
-        if (timedOut) {
-          await response.body?.cancel();
-          throw new Error("Event stream handshake timed out");
-        }
-        if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted) {
-          await response.body?.cancel();
-          break;
-        }
-        if (!response.ok) {
-          const failure = safeHttpError(response.status);
-          const error = new Error(failure.label);
-          error.code = failure.code;
-          try { await response.body?.cancel(); }
-          catch (cause) { error.cause = cause; }
-          throw error;
-        }
-        setConnection("connected", "Connected");
-        delay = 500;
-        await readEventStream(response, controller.signal, (frame) => {
-          if (generation !== streamGeneration || state.token !== token || pageHidden || controller.signal.aborted || !state.snapshot) return;
-          if (frame.event === "reset") {
-            resetForResync();
-            throw new Error("Feed reset");
-          }
-          if (frame.event === "delta") {
-            if (commitPulse(state, frame)) {
-              drawTopology();
-              schedulePulseExpiry();
-            }
-            state.snapshot.cursor = frame.cursor;
-            scheduleRefresh();
-            schedulePaneRefresh();
-          }
-        });
-        if (!controller.signal.aborted) {
-          setConnection("disconnected", "Reconnecting");
-          needsSnapshot = true;
-          await waitForReconnect(delay, controller.signal);
-          delay = Math.min(delay * 2, 10_000);
-        }
-      } catch (error) {
-        if (generation !== streamGeneration) break;
-        if (controller.signal.aborted && (!state.token || pageHidden)) break;
-        if (error.code === "auth" || error.code === "denied") { handleAuthFault(error, token); break; }
-        setConnection(timedOut || error.code === "unavailable" ? "error" : "disconnected", timedOut ? "Timed out · reconnecting" : error.message === "Failed to fetch" ? "Offline · reconnecting" : "Reconnecting");
-        needsSnapshot = true;
-        await waitForReconnect(delay, controller.signal);
-        delay = Math.min(delay * 2, 10_000);
-      } finally {
-        clearTimeout(headerTimer);
-        controller.signal.removeEventListener("abort", abortFetch);
-        if (streamController === controller) streamController = null;
-      }
-    }
-  })().finally(() => { if (generation === streamGeneration) streamTask = null; });
+  streamTask = runEventStream(token, generation).finally(() => {
+    if (generation === streamGeneration) streamTask = null;
+  });
 }
 
 async function connect() {
@@ -701,7 +956,11 @@ byId("auth-form").addEventListener("submit", (event) => {
 });
 boardPicker.addEventListener("change", () => chooseBoard(boardPicker.value));
 topologyNode.addEventListener("select-node", (event) => {
-  if (!state.snapshot?.devices.some((row) => row.id === event.detail) && !state.snapshot?.agents.some((row) => row.id === event.detail)) return;
+  if (
+    !state.snapshot?.devices.some((row) => row.id === event.detail) &&
+    !state.snapshot?.agents.some((row) => row.id === event.detail)
+  )
+    return;
   state.selectedNode = event.detail;
   renderViews();
 });
@@ -724,7 +983,13 @@ document.addEventListener("keydown", (event) => {
     filter.value = "";
     topologyNode.query = "";
     renderViews();
-  } else if (event.key === "/" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target?.closest?.("input, select, textarea, [contenteditable]")) {
+  } else if (
+    event.key === "/" &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.target?.closest?.("input, select, textarea, [contenteditable]")
+  ) {
     event.preventDefault();
     filter.focus();
   }
@@ -746,8 +1011,7 @@ document.addEventListener("visibilitychange", () => {
     drawTopology();
     stopStream();
     setConnection("disconnected", "Paused");
-  }
-  else if (state.token) {
+  } else if (state.token) {
     refreshSnapshot();
   }
 });
