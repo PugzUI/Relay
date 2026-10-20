@@ -62,8 +62,13 @@ try {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   await page.goto(origin);
+  // Interval polling, not the default requestAnimationFrame polling: a headless
+  // Chromium that stops producing compositor frames never re-evaluates a
+  // frame-polled predicate, so the wait would expire on an already-true state.
   await page.waitForFunction(
     () => window.workspaceStudy?.connected && workspaceStudy.state.workers.every((w) => w.online),
+    null,
+    { polling: 100 },
   );
   workerPids = await page.evaluate(() => workspaceStudy.state.workers.map((w) => w.pid));
   const dimensions = () =>
@@ -78,11 +83,17 @@ try {
   assert.ok(desktopSizes.every(([w, h]) => w === 96 && h === 36));
   const alpha = await page.evaluate(() => workspaceStudy.state.workers[0].id);
   await page.locator(".x6-node").filter({ hasText: "ALPHA" }).click();
-  await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1);
+  await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1, null, { polling: 100 });
   await page.locator(".x6-node").filter({ hasText: "ALPHA" }).click();
   assert.equal(await page.evaluate(() => workspaceStudy.sessionPanels.size), 1);
   await page.getByRole("button", { name: "Claim only", exact: true }).click();
-  await page.waitForFunction(() => workspaceStudy.state.work.some((w) => w.state === "claimed"));
+  await page.waitForFunction(
+    () => workspaceStudy.state.work.some((w) => w.state === "claimed"),
+    null,
+    {
+      polling: 100,
+    },
+  );
   const mid = await page.evaluate(
     () => workspaceStudy.state.work.find((w) => w.state === "claimed").id,
   );
@@ -92,6 +103,7 @@ try {
   await page.waitForFunction(
     (id) => workspaceStudy.state.work.find((w) => w.id === id)?.state === "done",
     mid,
+    { polling: 100 },
   );
   const committed = await page.evaluate(
     (id) => ({
@@ -112,7 +124,7 @@ try {
   await page.click("#reset");
   assert.equal(await page.evaluate(() => workspaceStudy.sessionPanels.size), 0);
   await page.click("#restore");
-  await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1);
+  await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1, null, { polling: 100 });
   assert.deepEqual(
     await page.evaluate(() => workspaceStudy.dock.panels.map((p) => p.id).sort()),
     ids,
@@ -136,6 +148,8 @@ try {
     () =>
       workspaceStudy.connected &&
       workspaceStudy.state.work.filter((w) => w.state === "done").length === 2,
+    null,
+    { polling: 100 },
   );
   assert.equal(
     await page.evaluate(() => workspaceStudy.state.audit.filter((e) => e.type === "ack").length),
