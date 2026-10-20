@@ -10,6 +10,27 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const evidence = await mkdtemp(join(tmpdir(), "relay-workspace-evidence-"));
+// The one overflow measurement used by every narrow-width check: the
+// DOCUMENT scroll width against the viewport width, plus the widest element
+// whose right edge passes the viewport. Extracted so that every measurement
+// in this harness is taken by the same procedure.
+const measureOverflow = (target) =>
+  target.evaluate(() => {
+    const root = document.documentElement;
+    const offenders = [...document.querySelectorAll("body *")]
+      .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.right > window.innerWidth + 1)
+      .sort((a, b) => b.rect.right - a.rect.right);
+    const offender = offenders[0];
+    const classes = offender ? String(offender.node.className).split(" ").filter(Boolean) : [];
+    return {
+      scrollWidth: root.scrollWidth,
+      innerWidth: window.innerWidth,
+      offenderCount: offenders.length,
+      offender: offender ? [offender.node.tagName.toLowerCase(), ...classes].join(".") : null,
+      offenderRight: offender ? Math.round(offender.rect.right) : null,
+    };
+  });
 const listener = createServer();
 await new Promise((resolve, reject) => {
   listener.once("error", reject);
@@ -183,24 +204,13 @@ try {
   assert.equal(malformed.status, 400);
   await malformed.body.cancel();
   await page.emulateMedia({ reducedMotion: "reduce" });
+  const narrowMeasurements = [];
   for (const width of [760, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
-    const overflow = await page.evaluate(() => {
-      const root = document.documentElement;
-      const offender = [...document.querySelectorAll("body *")]
-        .map((node) => ({ node, rect: node.getBoundingClientRect() }))
-        .filter(({ rect }) => rect.right > window.innerWidth + 1)
-        .sort((a, b) => b.rect.right - a.rect.right)[0];
-      const classes = offender ? String(offender.node.className).split(" ").filter(Boolean) : [];
-      return {
-        scrollWidth: root.scrollWidth,
-        innerWidth: window.innerWidth,
-        offender: offender ? [offender.node.tagName.toLowerCase(), ...classes].join(".") : null,
-        offenderRight: offender ? Math.round(offender.rect.right) : null,
-      };
-    });
+    const overflow = await measureOverflow(page);
+    narrowMeasurements.push({ width, state: "settled", ...overflow });
     assert.equal(
       overflow.scrollWidth > overflow.innerWidth,
       false,
@@ -209,6 +219,51 @@ try {
       } (offender ${overflow.offender ?? "none"} right=${overflow.offenderRight ?? 0}px)`,
     );
     assert.ok((await dimensions()).every(([w, h]) => w === 96 && h === 44));
+  }
+  // The descent above measures the SETTLED state: it waits 150ms after every
+  // resize, so the layout re-sync has already rewritten the Dockview overlay
+  // host's inline width before the measurement is taken. The transient state
+  // — a narrow viewport while the layout still carries the previous, wider
+  // width — is therefore outside the reach of every measurement above, and it
+  // is the state in which this prototype first failed: a stalled frame left
+  // the document wider than the viewport. This page reproduces that state
+  // deterministically instead of racing for it. Its ResizeObserver is frozen
+  // before any page script runs, so the re-sync callback never fires and the
+  // stale width persists for the whole measurement, at 150ms and at 650ms.
+  const stalePage = await browser.newPage({ viewport: { width: 1500, height: 1050 } });
+  stalePage.on("pageerror", (error) => errors.push(error.message));
+  stalePage.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  try {
+    await stalePage.addInitScript(() => {
+      window.ResizeObserver = class FrozenResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    });
+    await stalePage.goto(origin);
+    await stalePage.waitForFunction(
+      () => window.workspaceStudy?.connected && workspaceStudy.state.workers.every((w) => w.online),
+      null,
+      { polling: 100 },
+    );
+    await stalePage.setViewportSize({ width: 320, height: 1000 });
+    await stalePage.waitForTimeout(150);
+    const stale = await measureOverflow(stalePage);
+    narrowMeasurements.push({ width: 320, state: "layout re-sync frozen", ...stale });
+    assert.equal(
+      stale.scrollWidth > stale.innerWidth,
+      false,
+      `horizontal overflow at 320px with the layout re-sync frozen: scrollWidth ${
+        stale.scrollWidth
+      } > innerWidth ${stale.innerWidth} (offender ${stale.offender ?? "none"} right=${
+        stale.offenderRight ?? 0
+      }px)`,
+    );
+  } finally {
+    await stalePage.close();
   }
   await page.screenshot({ path: join(evidence, "workspace-narrow.png"), fullPage: true });
   assert.deepEqual(errors, []);
@@ -229,8 +284,14 @@ try {
       "worker continues during feed disconnect; reconnect has no duplicate ack",
       "shell and unauthenticated commands rejected",
       "760 / 390 / 320px without page overflow",
+      "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
     ],
+    narrowViewport: {
+      measurements: narrowMeasurements.length,
+      overflows: narrowMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
+      results: narrowMeasurements,
+    },
     evidence,
   };
   await writeFile(join(evidence, "verification.json"), JSON.stringify(report, null, 2), {
