@@ -31,7 +31,7 @@ import {
   reportShapes,
   runShapes,
   shapes,
-  trackedSources,
+  sourcePopulation,
 } from "./verification/string-aware-comparator/corpus-validation.mjs";
 
 /**
@@ -140,17 +140,27 @@ test("liveness: every mutant comparator is caught by the case list", async (t) =
   );
 });
 
-test("corpus: every tracked source file survives the stripper and every shape passes", async (t) => {
-  const sources = trackedSources();
-  assert.ok(sources.length > 0, "no tracked source files were enumerated");
-  const result = corruptedFiles(sources);
+test("corpus: every source file of the population survives the stripper and every shape passes", async (t) => {
+  const population = sourcePopulation();
+  assert.ok(population.files.length > 0, "no source files were enumerated");
+  t.diagnostic(`population: ${population.name}, ${population.files.length} JavaScript file(s)`);
+  const result = corruptedFiles(population);
   reportCorpus(result);
+  assert.equal(
+    result.population,
+    population.name,
+    "the sweep reported a different population than the one it enumerated",
+  );
   assert.deepEqual(
     result.failed.map((entry) => `${entry.file}: ${entry.error}`),
     [],
-    "a tracked file could not be transformed",
+    "a file of the population could not be transformed",
   );
-  assert.deepEqual(result.bad, [], "a tracked file's comment-stripped output does not parse");
+  assert.deepEqual(
+    result.bad,
+    [],
+    "a file of the population has a comment-stripped output that does not parse",
+  );
   assert.equal(
     result.processed + result.failed.length,
     result.expected,
@@ -159,7 +169,7 @@ test("corpus: every tracked source file survives the stripper and every shape pa
 
   // POSITIVE CONTROL: the detection path must be live. A deliberately naive comparator is
   // run through the SAME check and must be reported.
-  const naive = corruptedFiles(sources, naiveStrip);
+  const naive = corruptedFiles(population, naiveStrip);
   assert.ok(
     naive.bad.length > 0,
     "the corpus sweep did not report a deliberately naive comparator",

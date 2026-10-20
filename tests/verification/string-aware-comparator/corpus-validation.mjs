@@ -19,17 +19,30 @@
 // cannot see anything.
 //
 // THE REPOSITORY ROOT IS DERIVED FROM THIS MODULE'S OWN LOCATION (the nearest ancestor
-// holding a package.json), and the tracked files are enumerated with `git ls-files`; no
-// path is hardcoded and the script works from any working directory.
+// holding a package.json); no path is hardcoded and the script works from any working
+// directory.
+//
+// THE SOURCE POPULATION IS A FILESYSTEM POPULATION, COUNTED FROM THE TREE THAT IS BEING
+// TESTED: a recursive walk of the JavaScript files present in this checkout, with the
+// exclusions read from the repository's own .gitignore file (node_modules, coverage, the
+// generated build output). Nothing here asks git for the file list, so the population is
+// the same set in a checkout and in an index-free extraction - a `git ls-files` based
+// population would name a DIFFERENT set (the tracked files) and would fail outright where
+// there is no index. THE WALKED SET AND THE TRACKED SET ARE NOT THE SAME BY
+// CONSTRUCTION - an untracked, non-ignored JavaScript file joins the population - and in
+// this checkout the two are identical (the same 112 names), so the corpus is the
+// published set. The population is NAMED in full, its count is printed, and the
+// denominator of the sweep is the enumerated set. A population that cannot be enumerated
+// is a hard error, never an empty list that would let the denominator hold against zero.
 //
 // Usage: node corpus-validation.mjs [--self-test]
 //
 // Writes only to a temporary directory; never mutates the repository.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { comparePair, stripCommentsStringAware } from "./string-aware-comparator.mjs";
@@ -50,13 +63,113 @@ function findRepoRoot(start) {
 
 const repoRoot = findRepoRoot(moduleDirectory);
 
-/** Every tracked source file in the repository. */
-export function trackedSources() {
-  return execFileSync("git", ["ls-files", "*.mjs", "*.js", "*.cjs"], { cwd: repoRoot })
-    .toString()
-    .trim()
+/** The name of the population the corpus sweep counts, stated in full. */
+export const POPULATION_NAME =
+  "the JavaScript files (.mjs, .js, .cjs) of the checked-out tree, recursively, " +
+  "excluding the git metadata and the paths the repository's own .gitignore excludes " +
+  "(node_modules, coverage, the generated build output)";
+
+/** The ignore rules of the repository, read from the .gitignore file IN THE TREE. */
+function ignoreRules(root) {
+  const file = join(root, ".gitignore");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8")
     .split("\n")
-    .filter(Boolean);
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map(compileRule);
+}
+
+/** One ignore rule: whether it is negated, whether it is anchored at the root, its pattern. */
+function compileRule(line) {
+  const negated = line.startsWith("!");
+  const pattern = negated ? line.slice(1) : line;
+  const directoryOnly = pattern.endsWith("/");
+  const body = directoryOnly ? pattern.slice(0, -1) : pattern;
+  const anchored = body.startsWith("/");
+  const bare = anchored ? body.slice(1) : body;
+  if (bare.includes("**")) {
+    throw new Error(`the ignore rule "${line}" uses a '**' pattern this matcher cannot read`);
+  }
+  return { negated, anchored, pattern: globToRegExp(bare) };
+}
+
+/** A regular expression for one ignore pattern: '*' and '?' never cross a path separator. */
+function globToRegExp(pattern) {
+  let source = "";
+  for (const character of pattern) {
+    if (character === "*") source += "[^/]*";
+    else if (character === "?") source += "[^/]";
+    else source += character.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${source}$`);
+}
+
+/**
+ * True when the relative path is excluded by the rules. The LAST matching rule wins, so a
+ * negated rule re-includes a path, and a rule that matches a directory excludes everything
+ * under it.
+ */
+function isIgnored(rules, path) {
+  const segments = path.split("/");
+  let ignored = false;
+  for (const rule of rules) {
+    for (let index = 1; index <= segments.length; index += 1) {
+      const prefix = segments.slice(0, index).join("/");
+      const candidate = rule.anchored ? prefix : segments[index - 1];
+      if (rule.pattern.test(candidate)) {
+        ignored = !rule.negated;
+        break;
+      }
+    }
+  }
+  return ignored;
+}
+
+/**
+ * The JavaScript source files of the tree, relative to the repository root. The walk reads
+ * the tree that is being tested, so the population is the same set in a checkout and in an
+ * index-free extraction; nothing here asks git for the file list.
+ */
+function walkSources(root, rules) {
+  const files = [];
+  collectDirectory(root, root, rules, files);
+  return files.sort();
+}
+
+/** Collect the source files of one directory, descending into the directories it enters. */
+function collectDirectory(directory, root, rules, files) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const absolute = join(directory, entry.name);
+    const path = relative(root, absolute).split(sep).join("/");
+    if (entry.isDirectory()) {
+      if (entry.name !== ".git" && !isIgnored(rules, path)) {
+        collectDirectory(absolute, root, rules, files);
+      }
+      continue;
+    }
+    if (isSourceFile(entry, path, rules)) files.push(path);
+  }
+}
+
+/** True when the directory entry is a JavaScript source file that is not ignored. */
+function isSourceFile(entry, path, rules) {
+  if (!entry.isFile()) return false;
+  if (!/\.(?:mjs|js|cjs)$/.test(entry.name)) return false;
+  return !isIgnored(rules, path);
+}
+
+/**
+ * The source population of the corpus sweep: a FILESYSTEM population, counted from the
+ * tree that is being tested. A population that cannot be enumerated is a hard error, never
+ * an empty list that would let the denominator hold against zero.
+ */
+export function sourcePopulation() {
+  const files = walkSources(repoRoot, ignoreRules(repoRoot));
+  if (files.length === 0) {
+    throw new Error(`the source population is empty: ${POPULATION_NAME}`);
+  }
+  return { name: POPULATION_NAME, files };
 }
 
 /** True when the file at `path` parses as a module. */
@@ -86,7 +199,8 @@ export function parsesText(text) {
  * original is valid. A transform that throws is a FAILURE carrying its file name, never a
  * skip, and the processed count is returned so the denominator can be asserted.
  */
-export function corruptedFiles(sources, strip = stripCommentsStringAware) {
+export function corruptedFiles(population, strip = stripCommentsStringAware) {
+  const sources = population.files;
   const work = mkdtempSync(join(tmpdir(), "relay-corpus-"));
   const failed = [];
   const bad = [];
@@ -99,17 +213,21 @@ export function corruptedFiles(sources, strip = stripCommentsStringAware) {
       try {
         original = readFileSync(absolute, "utf8");
         stripped = strip(original);
+        if (stripped !== original) {
+          // The candidate is checked and REMOVED before the next file, so the sweep holds
+          // one temporary file at a time instead of one per source file.
+          const candidate = join(work, file.replace(/[\\/]/g, "__"));
+          writeFileSync(candidate, stripped);
+          const invalid = parses(absolute) && !parses(candidate);
+          rmSync(candidate, { force: true });
+          if (invalid) bad.push(file);
+        }
+        processed += 1;
       } catch (error) {
         failed.push({ file, error: error.message });
-        continue;
       }
-      processed += 1;
-      if (stripped === original) continue;
-      const out = join(work, file.replace(/[\\/]/g, "__"));
-      writeFileSync(out, stripped);
-      if (parses(absolute) && !parses(out)) bad.push(file);
     }
-    return { bad, failed, processed, expected: sources.length };
+    return { bad, failed, processed, expected: sources.length, population: population.name };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -240,8 +358,9 @@ export async function runShapes() {
 }
 
 export function reportCorpus(result) {
-  console.log(`tracked source files expected: ${result.expected}`);
-  console.log(`tracked source files processed: ${result.processed}`);
+  console.log(`population: ${result.population}, ${result.expected} JavaScript file(s)`);
+  console.log(`source files expected: ${result.expected}`);
+  console.log(`source files processed: ${result.processed}`);
   console.log(`transform failures: ${result.failed.length}`);
   for (const failure of result.failed) console.log(`   FAILED ${failure.file}: ${failure.error}`);
   console.log(`files whose stripped output is syntactically invalid: ${result.bad.length}`);
@@ -268,43 +387,57 @@ export function reportShapes(results) {
 
 async function main() {
   if (process.argv.includes("--self-test")) {
-    // POSITIVE CONTROL 1: the DETECTION path must be live. A deliberately naive comparator
-    // (strip `//` to end of line) is run through the SAME check and MUST be reported.
-    const naiveSource = [
-      "export function stripCommentsStringAware(source) {",
-      "  return String(source)",
-      '    .split("\\n")',
-      "    .map((line) => {",
-      '      const at = line.indexOf("//");',
-      "      return at === -1 ? line : line.slice(0, at);",
-      "    })",
-      '    .join("\\n");',
-      "}",
-    ].join("\n");
-    const naive = await import(`data:text/javascript,${encodeURIComponent(naiveSource)}`);
-    const detected = corruptedFiles(trackedSources(), naive.stripCommentsStringAware);
-    console.log(
-      `SELF-TEST 1: a deliberately naive comparator is reported on ${detected.bad.length} file(s) - the detection path is ${detected.bad.length > 0 ? "LIVE" : "DEAD"}`,
-    );
-
-    // POSITIVE CONTROL 2: the comparator under test must not mis-lex a nested template inside
-    // an interpolation - the shape that produced the live corruption in this repository.
-    const nested = `const s = \`\${JSON.stringify({ url: \`http://127.0.0.1:\${port}\` })}\`;\n`;
-    const broken = stripCommentsStringAware(nested);
-    const misLexed = broken !== nested && !parsesText(broken);
-    console.log(
-      `SELF-TEST 2: the comparator under test mis-lexes a nested template inside an interpolation: ${misLexed ? "YES (defect)" : "no"}`,
-    );
-    process.exit(detected.bad.length > 0 && !misLexed ? 0 : 1);
+    process.exit((await selfTest()) ? 0 : 1);
   }
 
-  const sources = trackedSources();
-  const corpus = corruptedFiles(sources);
+  const corpus = corruptedFiles(sourcePopulation());
   const corpusOk = reportCorpus(corpus);
   const shapeResults = await runShapes();
   const shapesOk = reportShapes(shapeResults);
   console.log(`corpus validation: ${corpusOk ? "PASS" : "FAIL"}`);
   process.exit(corpusOk && shapesOk ? 0 : 1);
+}
+
+/**
+ * The positive controls of the sweep: the DETECTION path must be live, the sweep itself
+ * must be able to measure, and the comparator under test must not mis-lex a nested
+ * template inside an interpolation - the shape that produced the live corruption in this
+ * repository.
+ */
+async function selfTest() {
+  // POSITIVE CONTROL 1: a deliberately naive comparator (strip `//` to end of line) is run
+  // through the SAME check and MUST be reported.
+  const naiveSource = [
+    "export function stripCommentsStringAware(source) {",
+    "  return String(source)",
+    '    .split("\\n")',
+    "    .map((line) => {",
+    '      const at = line.indexOf("//");',
+    "      return at === -1 ? line : line.slice(0, at);",
+    "    })",
+    '    .join("\\n");',
+    "}",
+  ].join("\n");
+  const naive = await import(`data:text/javascript,${encodeURIComponent(naiveSource)}`);
+  const detected = corruptedFiles(sourcePopulation(), naive.stripCommentsStringAware);
+  console.log(
+    `SELF-TEST 1: a deliberately naive comparator is reported on ${detected.bad.length} file(s) - the detection path is ${detected.bad.length > 0 ? "LIVE" : "DEAD"}`,
+  );
+  console.log(
+    `SELF-TEST 1b: the sweep itself failed on ${detected.failed.length} file(s) - the control only counts when the sweep could measure`,
+  );
+  for (const failure of detected.failed) {
+    console.log(`   FAILED ${failure.file}: ${failure.error}`);
+  }
+
+  // POSITIVE CONTROL 2: the comparator under test must not mis-lex a nested template.
+  const nested = `const s = \`\${JSON.stringify({ url: \`http://127.0.0.1:\${port}\` })}\`;\n`;
+  const broken = stripCommentsStringAware(nested);
+  const misLexed = broken !== nested && !parsesText(broken);
+  console.log(
+    `SELF-TEST 2: the comparator under test mis-lexes a nested template inside an interpolation: ${misLexed ? "YES (defect)" : "no"}`,
+  );
+  return detected.bad.length > 0 && detected.failed.length === 0 && !misLexed;
 }
 
 // The script runs only when it is invoked directly; importing it exposes the detection
