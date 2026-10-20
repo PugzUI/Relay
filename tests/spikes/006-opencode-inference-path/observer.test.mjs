@@ -1,33 +1,59 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import observer from "./observer.mjs";
 
 const nativeSession = "ses_inference_fixture";
 const challenges = ["READY_0000000000000000", "DELIVERED_0000000000000000"];
 const input = () => ({
-  model: "openrouter/free", stream: true, max_tokens: 1024,
-  messages: [{ role: "system", content: challenges.join(" ") },
-    { role: "user", content: "Relay pending state changed. Fixture-only content." }],
+  model: "openrouter/free",
+  stream: true,
+  max_tokens: 1024,
+  messages: [
+    { role: "system", content: challenges.join(" ") },
+    { role: "user", content: "Relay pending state changed. Fixture-only content." },
+  ],
 });
-const requestFor = (body = input()) => new Request("http://127.0.0.1:9/v1/chat/completions", {
-  method: "POST", headers: { "Content-Type": "application/json", "X-Fixture-Private": "never-capture-this-header" },
-  body: JSON.stringify(body),
+const requestFor = (body = input()) =>
+  new Request("http://127.0.0.1:9/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Fixture-Private": "never-capture-this-header",
+    },
+    body: JSON.stringify(body),
+  });
+const eventFor = (request, overrides = {}) => ({
+  sessionID: nativeSession,
+  kind: "primary",
+  agent: "relay-probe",
+  request,
+  ...overrides,
 });
-const eventFor = (request, overrides = {}) => ({ sessionID: nativeSession, kind: "primary", agent: "relay-probe", request, ...overrides });
 
 async function fixture(t, hook) {
-  const root = await mkdtemp(join(process.env.TMPDIR, "relay-inference-observer-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const parent = resolve(tmpdir());
+  const root = await mkdtemp(join(parent, "relay-inference-observer-"));
+  t.after(() => {
+    if (!resolve(root).startsWith(`${parent}${sep}`))
+      throw new Error("Refusing unsafe test cleanup");
+    return rm(root, { recursive: true, force: true });
+  });
   const reportPath = join(root, "trace.json");
   const hooks = new Map();
   const cleanup = await observer.setup({
-    app: { version: "2.0.27" }, options: { nativeSession, reportPath, challenges },
-    session: { hook: hook ?? (async (name, callback) => {
-      hooks.set(name, callback);
-      return { dispose: async () => hooks.delete(name) };
-    }) },
+    app: { version: "2.0.27" },
+    options: { nativeSession, reportPath, challenges },
+    session: {
+      hook:
+        hook ??
+        ((name, callback) => {
+          hooks.set(name, callback);
+          return { dispose: () => hooks.delete(name) };
+        }),
+    },
   });
   t.after(cleanup);
   return { hooks, cleanup, reportPath };
@@ -41,7 +67,8 @@ test("inference observer preserves native request/response bytes and excludes bo
   const event = eventFor(request);
   await hooks.get("http.request")(event);
   assert.deepEqual(await request.json(), input());
-  const responseText = 'data: {"model":"fixture/model","choices":[{"delta":{"content":"fixture-only-output"}}]}\n\ndata: [DONE]\n\n';
+  const responseText =
+    'data: {"model":"fixture/model","choices":[{"delta":{"content":"fixture-only-output"}}]}\n\ndata: [DONE]\n\n';
   const response = new Response(responseText, { headers: { "Content-Type": "text/event-stream" } });
   hooks.get("http.response")({ ...event, response });
   assert.equal(await response.text(), responseText);
@@ -76,10 +103,17 @@ test("inference observer bounds capture count and body size", async (t) => {
 
 test("inference observer rolls back earlier registration when the response hook fails", async (t) => {
   let disposed = false;
-  await assert.rejects(fixture(t, async (name) => {
-    if (name === "http.response") throw new Error("fixture registration failure");
-    return { dispose: async () => { disposed = true; } };
-  }), /fixture registration failure/);
+  await assert.rejects(
+    fixture(t, (name) => {
+      if (name === "http.response") throw new Error("fixture registration failure");
+      return {
+        dispose: () => {
+          disposed = true;
+        },
+      };
+    }),
+    /fixture registration failure/,
+  );
   assert.equal(disposed, true);
 });
 
@@ -87,7 +121,9 @@ test("inference observer reports a missing model without retaining response text
   const { hooks, cleanup, reportPath } = await fixture(t);
   const event = eventFor(requestFor());
   await hooks.get("http.request")(event);
-  const response = new Response('data: {"choices":[{"delta":{"content":"private-fixture-text"}}]}\n\n');
+  const response = new Response(
+    'data: {"choices":[{"delta":{"content":"private-fixture-text"}}]}\n\n',
+  );
   hooks.get("http.response")({ ...event, response });
   await response.text();
   await cleanup();
@@ -101,18 +137,30 @@ test("inference observer cleanup does not wait for an unconsumed original respon
   const event = eventFor(requestFor());
   await hooks.get("http.request")(event);
   let source;
-  const response = new Response(new ReadableStream({ start(controller) { source = controller; } }));
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        source = controller;
+      },
+    }),
+  );
   hooks.get("http.response")({ ...event, response });
   let timer;
   try {
-    await Promise.race([cleanup(), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error("Observer cleanup exceeded its deadline")), 5000);
-    })]);
+    await Promise.race([
+      cleanup(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Observer cleanup exceeded its deadline")), 5000);
+      }),
+    ]);
   } finally {
     clearTimeout(timer);
     source.close();
   }
-  assert.equal(JSON.parse(await readFile(reportPath, "utf8")).calls[0].responseError, "body_deadline");
+  assert.equal(
+    JSON.parse(await readFile(reportPath, "utf8")).calls[0].responseError,
+    "body_deadline",
+  );
   assert.equal(await response.text(), "");
 });
 
@@ -120,12 +168,19 @@ test("inference observer cleanup waits for an in-flight request capture", async 
   const { hooks, cleanup, reportPath } = await fixture(t);
   let source;
   const request = new Request("http://127.0.0.1:9/v1/chat/completions", {
-    method: "POST", duplex: "half",
-    body: new ReadableStream({ start(controller) { source = controller; } }),
+    method: "POST",
+    duplex: "half",
+    body: new ReadableStream({
+      start(controller) {
+        source = controller;
+      },
+    }),
   });
   const capturing = hooks.get("http.request")(eventFor(request));
   let finished = false;
-  const stopping = cleanup().then(() => { finished = true; });
+  const stopping = cleanup().then(() => {
+    finished = true;
+  });
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(finished, false, "Cleanup returned before the request capture settled");
@@ -142,8 +197,12 @@ test("inference observer cleanup waits for an in-flight request capture", async 
 test("inference observer projects bounded metadata instead of copying unexpected payload fields", async (t) => {
   const { hooks, cleanup, reportPath } = await fixture(t);
   const sentinel = "PRIVATE_METADATA_FIXTURE";
-  const body = { model: { payload: sentinel }, stream: { payload: sentinel }, max_tokens: { payload: sentinel },
-    messages: Array.from({ length: 70 }, () => ({ role: sentinel, content: sentinel })) };
+  const body = {
+    model: { payload: sentinel },
+    stream: { payload: sentinel },
+    max_tokens: { payload: sentinel },
+    messages: Array.from({ length: 70 }, () => ({ role: sentinel, content: sentinel })),
+  };
   const original = requestFor(body);
   await hooks.get("http.request")(eventFor(original));
   await cleanup();
@@ -166,10 +225,16 @@ test("inference observer coalesces duplicate response callbacks", async (t) => {
   const response = new Response('data: {"model":"fixture/model"}\n\n');
   const clone = response.clone.bind(response);
   let clones = 0;
-  response.clone = () => { clones++; return clone(); };
+  response.clone = () => {
+    clones++;
+    return clone();
+  };
   for (let index = 0; index < 20; index++) hooks.get("http.response")({ ...event, response });
   await response.text();
   await cleanup();
   assert.equal(clones, 1);
-  assert.equal(JSON.parse(await readFile(reportPath, "utf8")).calls[0].responseModel, "fixture/model");
+  assert.equal(
+    JSON.parse(await readFile(reportPath, "utf8")).calls[0].responseModel,
+    "fixture/model",
+  );
 });
