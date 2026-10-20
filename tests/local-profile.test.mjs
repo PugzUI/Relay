@@ -9,7 +9,10 @@ import { authenticate, loadRegistry } from "../src/auth.mjs";
 import { open } from "../src/relay.mjs";
 import { privateFile, withTempDir } from "./network-helpers.mjs";
 
-const paths = (parent) => ({ root: join(parent, ".local/store"), file: join(parent, ".local/relay.json") });
+const paths = (parent) => ({
+  root: join(parent, ".local/store"),
+  file: join(parent, ".local/relay.json"),
+});
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 
 test("local startup creates a private real profile and reuses its identity and credentials", async () => {
@@ -29,14 +32,17 @@ test("local startup creates a private real profile and reuses its identity and c
       device = relay.device;
       assert.equal(relay.snapshot().totals.agents, 0);
       assert.equal(relay.stats().messages.rows, 0);
-    } finally { relay.close(); }
+    } finally {
+      relay.close();
+    }
     const token = (await readFile(profile.tokenFile, "utf8")).trim();
     assert.equal(/^[A-Za-z0-9_-]{43}$/.test(token), true);
     const viewer = authenticate(await loadRegistry(selected.credentialsFile), `Bearer ${token}`);
     assert.equal(viewer.grant.inspect.topology, true);
     assert.deepEqual(viewer.grant.inboxRead, [`host:${device.id}`]);
     assert.deepEqual(viewer.grant.workRead, [`host:${device.id}`]);
-    for (const name of ["workers", "register", "enroll", "recipients", "boardPost", "boardClaim"]) assert.deepEqual(viewer.grant[name], []);
+    for (const name of ["workers", "register", "enroll", "recipients", "boardPost", "boardClaim"])
+      assert.deepEqual(viewer.grant[name], []);
     const files = [file, selected.credentialsFile, profile.tokenFile];
     const before = await Promise.all(files.map((path) => readFile(path)));
     if (process.platform !== "win32") {
@@ -45,9 +51,16 @@ test("local startup creates a private real profile and reuses its identity and c
     }
     await config.prepareLocalProfile(root, file);
     const after = await Promise.all(files.map((path) => readFile(path)));
-    assert.equal(before.every((value, i) => value.equals(after[i])), true);
+    assert.equal(
+      before.every((value, i) => value.equals(after[i])),
+      true,
+    );
     const reopened = open({ root, readOnly: true });
-    try { assert.deepEqual(reopened.device, device); } finally { reopened.close(); }
+    try {
+      assert.deepEqual(reopened.device, device);
+    } finally {
+      reopened.close();
+    }
   });
 });
 
@@ -61,8 +74,18 @@ test("generated loopback profile upgrades to tailnet without rotating viewer cre
     const before = open({ root, readOnly: true });
     const device = before.device;
     before.close();
-    const legacy = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4200 },
-      tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+    const legacy = {
+      version: 1,
+      role: "host",
+      mode: "local",
+      listen: { host: "127.0.0.1", port: 4200 },
+      tls: null,
+      allowedPeers: [],
+      credentialsFile: "credentials.json",
+      hub: null,
+      pool: null,
+      views: [],
+    };
     await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
     await config.prepareLocalProfile(root, file);
     assert.equal((await config.readConfig(file)).mode, "tailnet");
@@ -70,7 +93,11 @@ test("generated loopback profile upgrades to tailnet without rotating viewer cre
     assert.equal((await readFile(profile.tokenFile)).equals(tokenBefore), true);
     assert.equal((await readFile(registryPath)).equals(registryBefore), true);
     const after = open({ root, readOnly: true });
-    try { assert.deepEqual(after.device, device); } finally { after.close(); }
+    try {
+      assert.deepEqual(after.device, device);
+    } finally {
+      after.close();
+    }
     assert.equal((await stat(file)).mode & 0o077, 0);
   });
 });
@@ -79,8 +106,18 @@ test("custom existing loopback profile stays unchanged", async () => {
   await withTempDir(async (parent) => {
     const { root, file } = paths(parent);
     await config.prepareLocalProfile(root, file);
-    const legacy = { version: 1, role: "host", mode: "local", listen: { host: "127.0.0.1", port: 4211 },
-      tls: null, allowedPeers: [], credentialsFile: "credentials.json", hub: null, pool: null, views: [] };
+    const legacy = {
+      version: 1,
+      role: "host",
+      mode: "local",
+      listen: { host: "127.0.0.1", port: 4211 },
+      tls: null,
+      allowedPeers: [],
+      credentialsFile: "credentials.json",
+      hub: null,
+      pool: null,
+      views: [],
+    };
     await writeFile(file, JSON.stringify(legacy), { mode: 0o600 });
     const original = await readFile(file);
     await config.prepareLocalProfile(root, file);
@@ -92,7 +129,10 @@ test("local startup refuses incomplete credential files without replacing them",
   await withTempDir(async (parent) => {
     const { root, file } = paths(parent);
     await mkdir(join(parent, ".local"), { mode: 0o700 });
-    const tokenFile = await privateFile(join(parent, ".local/viewer.token"), "existing private file");
+    const tokenFile = await privateFile(
+      join(parent, ".local/viewer.token"),
+      "existing private file",
+    );
     await assert.rejects(config.prepareLocalProfile(root, file), { code: "active" });
     assert.equal(await readFile(tokenFile, "utf8"), "existing private file");
     await assert.rejects(stat(root), { code: "ENOENT" });
@@ -118,7 +158,11 @@ test("local startup refuses an invalid viewer token without replacing it", async
     await privateFile(profile.tokenFile, invalid);
     await assert.rejects(config.prepareLocalProfile(root, file), { code: "input" });
     const result = spawnSync(process.execPath, [cli, "serve", "--json"], {
-      cwd: parent, encoding: "utf8", timeout: 2_000, killSignal: "SIGKILL", maxBuffer: 16_384,
+      cwd: parent,
+      encoding: "utf8",
+      timeout: 2_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 16_384,
     });
     assert.ifError(result.error);
     assert.equal(result.status, 2);
@@ -138,7 +182,11 @@ test("local startup refuses a revoked viewer without restoring credentials", asy
     await privateFile(selected.credentialsFile, revoked);
     await assert.rejects(config.prepareLocalProfile(root, file), { code: "auth" });
     const result = spawnSync(process.execPath, [cli, "serve", "--json"], {
-      cwd: parent, encoding: "utf8", timeout: 2_000, killSignal: "SIGKILL", maxBuffer: 16_384,
+      cwd: parent,
+      encoding: "utf8",
+      timeout: 2_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 16_384,
     });
     assert.ifError(result.error);
     assert.equal(result.status, 3);
@@ -150,7 +198,9 @@ test("local startup refuses a revoked viewer without restoring credentials", asy
 });
 
 for (const name of ["relay.json", "viewer.token"]) {
-  test(`local startup rejects a writerless ${name} FIFO without hanging`, { skip: process.platform === "win32" }, async () => {
+  test(`local startup rejects a writerless ${name} FIFO without hanging`, {
+    skip: process.platform === "win32",
+  }, async () => {
     await withTempDir(async (parent) => {
       const { root, file } = paths(parent);
       await config.prepareLocalProfile(root, file);
@@ -162,9 +212,15 @@ for (const name of ["relay.json", "viewer.token"]) {
       const source = `import {prepareLocalProfile} from ${JSON.stringify(new URL("../src/config.mjs", import.meta.url).href)};
         try { await prepareLocalProfile(process.argv[1], process.argv[2]); process.exitCode = 1; }
         catch (error) { process.exitCode = error.code === "input" ? 0 : 2; }`;
-      const result = spawnSync(process.execPath, ["--input-type=module", "-e", source, root, file], {
-        encoding: "utf8", timeout: 1_500, killSignal: "SIGKILL",
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", source, root, file],
+        {
+          encoding: "utf8",
+          timeout: 1_500,
+          killSignal: "SIGKILL",
+        },
+      );
       assert.ifError(result.error);
       assert.equal(result.status, 0);
     });

@@ -90,11 +90,7 @@
       "host": "HTTP loopback",
       "hub": "HTTPS through an owned loopback TLS terminator"
     },
-    "acknowledgedOutcomes": [
-      "done",
-      "done",
-      "done"
-    ],
+    "acknowledgedOutcomes": ["done", "done", "done"],
     "messageRows": {
       "hub": 2,
       "host": 1
@@ -112,103 +108,52 @@
     "reducedMotion": "emulated and verified",
     "connectedViews": {
       "wide": {
-        "viewport": [
-          1440,
-          1000
-        ],
-        "document": [
-          1440,
-          1000
-        ],
+        "viewport": [1440, 1000],
+        "document": [1440, 1000],
         "horizontalOverflow": false,
         "topologyItems": 5,
         "inboxRows": 1,
         "bountyRows": 1,
         "connection": "Connected",
-        "panes": [
-          "Ready",
-          "Ready"
-        ]
+        "panes": ["Ready", "Ready"]
       },
       "medium": {
-        "viewport": [
-          1000,
-          900
-        ],
-        "document": [
-          1000,
-          900
-        ],
+        "viewport": [1000, 900],
+        "document": [1000, 900],
         "horizontalOverflow": false,
         "connection": "Connected",
-        "panes": [
-          "Ready",
-          "Ready"
-        ]
+        "panes": ["Ready", "Ready"]
       },
       "narrow": {
-        "viewport": [
-          390,
-          844
-        ],
-        "document": [
-          390,
-          1443
-        ],
+        "viewport": [390, 844],
+        "document": [390, 1443],
         "horizontalOverflow": false,
         "connection": "Connected",
-        "panes": [
-          "Ready",
-          "Ready"
-        ]
+        "panes": ["Ready", "Ready"]
       },
       "narrowScrolledBoard": {
-        "viewport": [
-          390,
-          1200
-        ],
-        "document": [
-          390,
-          1443
-        ],
+        "viewport": [390, 1200],
+        "document": [390, 1443],
         "horizontalOverflow": false,
         "connection": "Connected",
-        "panes": [
-          "Ready",
-          "Ready"
-        ]
+        "panes": ["Ready", "Ready"]
       }
     },
     "offlineRestartProbe": {
       "brokerStop": {
         "connection": "disconnected",
         "label": "Reconnecting",
-        "panes": [
-          "Reconnecting · cached",
-          "Reconnecting · cached"
-        ],
-        "cachedRowsRetained": [
-          1,
-          1
-        ]
+        "panes": ["Reconnecting · cached", "Reconnecting · cached"],
+        "cachedRowsRetained": [1, 1]
       },
       "restart": {
         "freshDemoInstanceReauthenticated": true,
         "connection": "Connected",
-        "panes": [
-          "Ready",
-          "Ready"
-        ],
-        "rows": [
-          1,
-          1
-        ]
+        "panes": ["Ready", "Ready"],
+        "rows": [1, 1]
       },
       "runtimeExceptions": 0,
-      "demoProcessExitCodes": [
-        0,
-        0
-      ],
+      "demoProcessExitCodes": [0, 0],
       "temporaryTokenFilesRemoved": true,
       "ownedBrowserAndDemoProcessesStopped": true
     },
@@ -248,9 +193,7 @@
       "kilo",
       "cline"
     ],
-    "implementedAdapters": [
-      "opencode"
-    ],
+    "implementedAdapters": ["opencode"],
     "qualifiedAdapters": [],
     "nativeSessionWakeExercised": false,
     "D01ThroughD26": "pending"

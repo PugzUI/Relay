@@ -17,7 +17,10 @@ const workerName = "worker";
 const RATE_WINDOW_MS = 1000;
 
 function assertPrivateRoot(root) {
-  assert.ok(root.startsWith(`${scratchRoot}${path.sep}`), `test root must be beneath ${scratchRoot}`);
+  assert.ok(
+    root.startsWith(`${scratchRoot}${path.sep}`),
+    `test root must be beneath ${scratchRoot}`,
+  );
 }
 
 async function freePort() {
@@ -27,14 +30,22 @@ async function freePort() {
     server.listen(0, "127.0.0.1", resolve);
   });
   const { port } = server.address();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return port;
 }
 
 function emptyGrant() {
   return {
-    enroll: [], register: [], workers: [], recipients: [], boardPost: [], boardClaim: [],
-    inboxRead: [], workRead: [],
+    enroll: [],
+    register: [],
+    workers: [],
+    recipients: [],
+    boardPost: [],
+    boardClaim: [],
+    inboxRead: [],
+    workRead: [],
     inspect: { messages: false, receipts: false, audit: false, topology: false },
     reportDevice: null,
   };
@@ -58,18 +69,21 @@ async function createBroker(root, role, entries, { pool = null } = {}) {
   const credentialsFile = path.join(root, "credentials.json");
   const configFile = path.join(root, "broker.json");
   await privateWrite(credentialsFile, `${JSON.stringify({ version: 1, credentials: entries })}\n`);
-  await privateWrite(configFile, `${JSON.stringify({
-    version: 1,
-    role,
-    mode: "local",
-    listen: { host: "127.0.0.1", port },
-    tls: null,
-    allowedPeers: [],
-    credentialsFile: "./credentials.json",
-    hub: null,
-    pool,
-    views: [],
-  })}\n`);
+  await privateWrite(
+    configFile,
+    `${JSON.stringify({
+      version: 1,
+      role,
+      mode: "local",
+      listen: { host: "127.0.0.1", port },
+      tls: null,
+      allowedPeers: [],
+      credentialsFile: "./credentials.json",
+      hub: null,
+      pool,
+      views: [],
+    })}\n`,
+  );
   const broker = await serve({ root, configFile });
   try {
     assert.equal(broker.address.address, "127.0.0.1");
@@ -117,7 +131,14 @@ async function createPair(t) {
 
   const hubGrant = emptyGrant();
   hubGrant.enroll = [{ deviceId: hostDevice.id, deviceName: hostDevice.name }];
-  hubGrant.register = [{ deviceId: hostDevice.id, deviceName: hostDevice.name, runtimes: [workerName], allocate: false }];
+  hubGrant.register = [
+    {
+      deviceId: hostDevice.id,
+      deviceName: hostDevice.name,
+      runtimes: [workerName],
+      allocate: false,
+    },
+  ];
   hubGrant.workers = [worker];
   hubGrant.recipients = [worker];
   hubGrant.boardPost = ["bounty"];
@@ -132,7 +153,14 @@ async function createPair(t) {
   owned.clients.push(hubConnection.client);
 
   const hostGrant = emptyGrant();
-  hostGrant.register = [{ deviceId: hostDevice.id, deviceName: hostDevice.name, runtimes: [workerName], allocate: true }];
+  hostGrant.register = [
+    {
+      deviceId: hostDevice.id,
+      deviceName: hostDevice.name,
+      runtimes: [workerName],
+      allocate: true,
+    },
+  ];
   hostGrant.workers = [worker];
   hostGrant.recipients = [worker];
   hostGrant.boardPost = [hostBoard];
@@ -148,13 +176,22 @@ async function createPair(t) {
 
   const enrollment = await hubConnection.client.enroll(hostDevice);
   const repeated = await hubConnection.client.enroll(hostDevice);
-  assert.deepEqual({ id: repeated.id, name: repeated.name, init: repeated.init }, { id: enrollment.id, name: enrollment.name, init: enrollment.init });
+  assert.deepEqual(
+    { id: repeated.id, name: repeated.name, init: repeated.init },
+    { id: enrollment.id, name: enrollment.name, init: enrollment.init },
+  );
   assert.equal(enrollment.repeat, false);
   assert.equal(repeated.repeat, true);
 
-  const hubAgent = await hubConnection.client.register(workerName, { slot: "001", caps: ["inspect"] });
+  const hubAgent = await hubConnection.client.register(workerName, {
+    slot: "001",
+    caps: ["inspect"],
+  });
   const hubSession = await hubConnection.client.join(hubAgent.id);
-  const hostAgent = await hostConnection.client.register(workerName, { slot: "001", caps: ["inspect"] });
+  const hostAgent = await hostConnection.client.register(workerName, {
+    slot: "001",
+    caps: ["inspect"],
+  });
   const hostSession = await hostConnection.client.join(hostAgent.id);
   assert.equal(hubAgent.id, hostAgent.id);
   assert.equal(hubSession.worker, hostSession.worker);
@@ -164,41 +201,67 @@ async function createPair(t) {
   const local = open({ root: hostRoot });
   owned.relays.push(local);
   return {
-    root, hubRoot, hostRoot, hubDevice, hostDevice, worker, hostBoard,
-    hub: hubConnection.client, hubToken: hubCredential.token, hubTokenFile: hubConnection.tokenFile, hubUrl: hub.url,
-    host: hostConnection.client, hostToken: hostCredential.token, hostTokenFile: hostConnection.tokenFile, hostUrl: host.url,
-    hubSid: hubSession.id, hostSid: hostSession.id, local, owned,
+    root,
+    hubRoot,
+    hostRoot,
+    hubDevice,
+    hostDevice,
+    worker,
+    hostBoard,
+    hub: hubConnection.client,
+    hubToken: hubCredential.token,
+    hubTokenFile: hubConnection.tokenFile,
+    hubUrl: hub.url,
+    host: hostConnection.client,
+    hostToken: hostCredential.token,
+    hostTokenFile: hostConnection.tokenFile,
+    hostUrl: host.url,
+    hubSid: hubSession.id,
+    hostSid: hostSession.id,
+    local,
+    owned,
   };
 }
 
-async function request(url, { method = "GET", token, body, headers = {}, maxBytes = 1_048_576 } = {}) {
+function request(url, { method = "GET", token, body, headers = {}, maxBytes = 1_048_576 } = {}) {
   const target = new URL(url);
   return new Promise((resolve, reject) => {
-    const req = http.request({
-      protocol: target.protocol,
-      hostname: target.hostname,
-      port: target.port,
-      path: `${target.pathname}${target.search}`,
-      method,
-      headers: {
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(body) }),
-        ...headers,
+    const req = http.request(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method,
+        headers: {
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...(body === undefined
+            ? {}
+            : { "content-type": "application/json", "content-length": Buffer.byteLength(body) }),
+          ...headers,
+        },
       },
-    }, (res) => {
-      const chunks = [];
-      let bytes = 0;
-      res.on("data", (chunk) => {
-        bytes += chunk.length;
-        if (bytes > maxBytes) {
-          req.destroy(new Error("Integration response exceeded its byte bound"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      res.once("error", reject);
-      res.once("end", () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString("utf8") }));
-    });
+      (res) => {
+        const chunks = [];
+        let bytes = 0;
+        res.on("data", (chunk) => {
+          bytes += chunk.length;
+          if (bytes > maxBytes) {
+            req.destroy(new Error("Integration response exceeded its byte bound"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.once("error", reject);
+        res.once("end", () =>
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
     req.setTimeout(4000, () => req.destroy(new Error("Integration request timed out")));
     req.once("error", reject);
     if (body !== undefined) req.end(body);
@@ -208,13 +271,19 @@ async function request(url, { method = "GET", token, body, headers = {}, maxByte
 
 async function closeServer(server) {
   if (!server.listening) return;
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
 }
 
 async function cleanup(actions) {
   const errors = [];
   for (const action of actions) {
-    try { await action(); } catch (error) { errors.push(error); }
+    try {
+      await action();
+    } catch (error) {
+      errors.push(error);
+    }
   }
   if (errors.length) throw new AggregateError(errors, "Integration cleanup failed");
 }
@@ -241,16 +310,25 @@ async function createResponseDropProxy(upstream, owned) {
         drop = call.op === "claim" && call.args?.options?.board === "bounty";
       }
       const target = new URL(upstream);
-      const outgoing = http.request({ hostname: target.hostname, port: target.port, path: req.url, method: req.method, headers: req.headers }, (reply) => {
-        if (drop) {
-          dropped++;
-          reply.resume();
-          reply.once("end", () => res.destroy());
-          return;
-        }
-        res.writeHead(reply.statusCode, reply.headers);
-        reply.pipe(res);
-      });
+      const outgoing = http.request(
+        {
+          hostname: target.hostname,
+          port: target.port,
+          path: req.url,
+          method: req.method,
+          headers: req.headers,
+        },
+        (reply) => {
+          if (drop) {
+            dropped++;
+            reply.resume();
+            reply.once("end", () => res.destroy());
+            return;
+          }
+          res.writeHead(reply.statusCode, reply.headers);
+          reply.pipe(res);
+        },
+      );
       outgoing.once("error", (error) => res.destroy(error));
       outgoing.end(body);
     });
@@ -263,9 +341,15 @@ async function createResponseDropProxy(upstream, owned) {
   const address = server.address();
   return {
     url: `http://127.0.0.1:${address.port}`,
-    arm() { armed = true; },
-    disarm() { armed = false; },
-    get dropped() { return dropped; },
+    arm() {
+      armed = true;
+    },
+    disarm() {
+      armed = false;
+    },
+    get dropped() {
+      return dropped;
+    },
   };
 }
 
@@ -292,28 +376,34 @@ function parseSse(text) {
   return frames;
 }
 
-async function readFeedEvent(url, token, cursor, mid) {
+function readFeedEvent(url, token, cursor, mid) {
   const target = new URL("/v1/events", url);
   target.searchParams.set("cursor", cursor);
   return new Promise((resolve, reject) => {
     let bytes = 0;
     let text = "";
-    const req = http.get(target, { headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" } }, (res) => {
-      res.on("data", (chunk) => {
-        bytes += chunk.length;
-        if (bytes > 65_536) {
-          req.destroy(new Error("Feed exceeded its bounded integration read"));
-          return;
-        }
-        text += chunk.toString("utf8");
-        const match = parseSse(text).find((frame) => frame.event === "delta" && frame.data?.mid === mid);
-        if (match) {
-          req.destroy();
-          resolve(match);
-        }
-      });
-      res.once("error", reject);
-    });
+    const req = http.get(
+      target,
+      { headers: { authorization: `Bearer ${token}`, accept: "text/event-stream" } },
+      (res) => {
+        res.on("data", (chunk) => {
+          bytes += chunk.length;
+          if (bytes > 65_536) {
+            req.destroy(new Error("Feed exceeded its bounded integration read"));
+            return;
+          }
+          text += chunk.toString("utf8");
+          const match = parseSse(text).find(
+            (frame) => frame.event === "delta" && frame.data?.mid === mid,
+          );
+          if (match) {
+            req.destroy();
+            resolve(match);
+          }
+        });
+        res.once("error", reject);
+      },
+    );
     const timer = setTimeout(() => req.destroy(new Error("Feed event timed out")), 4000);
     req.once("close", () => clearTimeout(timer));
     req.once("error", (error) => {
@@ -326,24 +416,62 @@ test("hub enrollment, device-qualified sessions, board isolation, and explicit m
   const env = await createPair(t);
   await waitForFreshRateWindow();
   const msgBody = "work: keep this text in Inbox";
-  const localMsg = await env.host.post(env.hostSid, env.hostBoard, { msg: msgBody }, { key: "local-msg" });
-  const localWork = await env.host.post(env.hostSid, env.hostBoard, { work: { task: "local-only" } }, { key: "local-work" });
-  const hubMsg = await env.hub.post(env.hubSid, "bounty", { msg: "hub inbox entry" }, { key: "hub-msg" });
-  const hubWork = await env.hub.post(env.hubSid, "bounty", { work: { task: "shared" } }, { key: "hub-work" });
+  const localMsg = await env.host.post(
+    env.hostSid,
+    env.hostBoard,
+    { msg: msgBody },
+    { key: "local-msg" },
+  );
+  const localWork = await env.host.post(
+    env.hostSid,
+    env.hostBoard,
+    { work: { task: "local-only" } },
+    { key: "local-work" },
+  );
+  const hubMsg = await env.hub.post(
+    env.hubSid,
+    "bounty",
+    { msg: "hub inbox entry" },
+    { key: "hub-msg" },
+  );
+  const hubWork = await env.hub.post(
+    env.hubSid,
+    "bounty",
+    { work: { task: "shared" } },
+    { key: "hub-work" },
+  );
 
   const localInbox = await env.host.list({ board: env.hostBoard, kind: "msg", data: true });
   const localBounties = await env.host.list({ board: env.hostBoard, kind: "work", data: true });
   const hubInbox = await env.hub.list({ board: "bounty", kind: "msg", data: true });
   const hubBounties = await env.hub.list({ board: "bounty", kind: "work", data: true });
-  assert.deepEqual(localInbox.items.map((item) => item.id), [localMsg.id]);
-  assert.deepEqual(localBounties.items.map((item) => item.id), [localWork.id]);
-  assert.deepEqual(hubInbox.items.map((item) => item.id), [hubMsg.id]);
-  assert.deepEqual(hubBounties.items.map((item) => item.id), [hubWork.id]);
+  assert.deepEqual(
+    localInbox.items.map((item) => item.id),
+    [localMsg.id],
+  );
+  assert.deepEqual(
+    localBounties.items.map((item) => item.id),
+    [localWork.id],
+  );
+  assert.deepEqual(
+    hubInbox.items.map((item) => item.id),
+    [hubMsg.id],
+  );
+  assert.deepEqual(
+    hubBounties.items.map((item) => item.id),
+    [hubWork.id],
+  );
   assert.deepEqual(localInbox.items[0].data, { msg: msgBody });
   assert.equal(localInbox.items[0].kind, "msg");
   assert.equal(hubBounties.items[0].kind, "work");
-  assert.equal(localBounties.items.some((item) => item.id === hubWork.id), false);
-  assert.equal(hubBounties.items.some((item) => item.id === localWork.id), false);
+  assert.equal(
+    localBounties.items.some((item) => item.id === hubWork.id),
+    false,
+  );
+  assert.equal(
+    hubBounties.items.some((item) => item.id === localWork.id),
+    false,
+  );
 
   await assert.rejects(env.hub.list({ board: env.hostBoard }), (error) => error.code === "denied");
   await assert.rejects(env.host.list({ board: "bounty" }), (error) => error.code === "denied");
@@ -352,7 +480,10 @@ test("hub enrollment, device-qualified sessions, board isolation, and explicit m
   assert.equal(claimed.mid, localWork.id);
   assert.equal(claimed.msg, undefined);
   await env.host.ack(env.hostSid, claimed.id, "done");
-  assert.equal((await env.host.list({ board: env.hostBoard, kind: "msg" })).items[0].state, "posted");
+  assert.equal(
+    (await env.host.list({ board: env.hostBoard, kind: "msg" })).items[0].state,
+    "posted",
+  );
 });
 
 test("authenticated pending RPC is non-consuming, permission-scoped, and reports expiry and requeue revisions", async (t) => {
@@ -361,19 +492,28 @@ test("authenticated pending RPC is non-consuming, permission-scoped, and reports
   grant.workers = [env.worker];
   grant.recipients = [env.worker];
   const tokenDigest = createHash("sha256").update(env.hubToken).digest("hex");
-  await privateWrite(path.join(env.hubRoot, "credentials.json"), `${JSON.stringify({
-    version: 1,
-    credentials: [{ principal: "east-host", tokenDigest, grant }],
-  })}\n`);
+  await privateWrite(
+    path.join(env.hubRoot, "credentials.json"),
+    `${JSON.stringify({
+      version: 1,
+      credentials: [{ principal: "east-host", tokenDigest, grant }],
+    })}\n`,
+  );
   const observer = open({ root: env.hubRoot, readOnly: true });
   env.owned.relays.push(observer);
   await waitForFreshRateWindow();
 
   const message = await env.hub.send(env.hubSid, env.worker, { msg: "private inbox body" });
   await env.hub.send(env.hubSid, env.worker, { work: { secret: "private work body" } });
-  const databaseState = () => JSON.stringify(Object.fromEntries(["messages", "leases", "audit", "rpc"].map((table) => [
-    table, observer._store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
-  ])));
+  const databaseState = () =>
+    JSON.stringify(
+      Object.fromEntries(
+        ["messages", "leases", "audit", "rpc"].map((table) => [
+          table,
+          observer._store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+        ]),
+      ),
+    );
   const beforeRead = databaseState();
   await assert.rejects(env.hub.pending("unscoped-session"), (error) => error.code === "denied");
   assert.equal(databaseState(), beforeRead);
@@ -409,34 +549,53 @@ test("authenticated pending RPC is non-consuming, permission-scoped, and reports
     await assert.rejects(env.hub.pending(env.hubSid), (error) => error.code === "session");
     assert.equal(databaseState(), beforeStaleRead);
 
-    await privateWrite(path.join(env.hubRoot, "credentials.json"), `${JSON.stringify({ version: 1, credentials: [] })}\n`);
+    await privateWrite(
+      path.join(env.hubRoot, "credentials.json"),
+      `${JSON.stringify({ version: 1, credentials: [] })}\n`,
+    );
     const beforeRevokedRead = databaseState();
     await assert.rejects(env.hub.pending(env.hubSid), (error) => error.code === "auth");
     assert.equal(databaseState(), beforeRevokedRead);
-  } finally { Date.now = realNow; }
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("authenticated topology and committed feed expose metadata without payload or session data", async (t) => {
   const env = await createPair(t);
   await waitForFreshRateWindow();
   const secretText = "private-payload-should-never-enter-global-feed";
-  const admitted = await env.hub.post(env.hubSid, "bounty", { msg: secretText }, { key: "feed-secret" });
+  const admitted = await env.hub.post(
+    env.hubSid,
+    "bounty",
+    { msg: secretText },
+    { key: "feed-secret" },
+  );
   const response = await request(`${env.hubUrl}/v1/topology`, { token: env.hubToken });
   assert.equal(response.status, 200);
   assert.match(response.headers["cache-control"], /no-store/);
   const snapshot = JSON.parse(response.text);
   assert.equal(snapshot.authority, env.hub.authority);
-  for (const forbidden of [secretText, env.hubToken, env.hubSid, env.hostSid, env.hostRoot]) assert.equal(response.text.includes(forbidden), false);
-  assert.ok(snapshot.boards.some((board) => board.id === "bounty" && board.authority === env.hub.authority));
+  for (const forbidden of [secretText, env.hubToken, env.hubSid, env.hostSid, env.hostRoot])
+    assert.equal(response.text.includes(forbidden), false);
+  assert.ok(
+    snapshot.boards.some((board) => board.id === "bounty" && board.authority === env.hub.authority),
+  );
 
-  const next = await env.hub.post(env.hubSid, "bounty", { work: { task: "feed-event" } }, { key: "feed-work" });
+  const next = await env.hub.post(
+    env.hubSid,
+    "bounty",
+    { work: { task: "feed-event" } },
+    { key: "feed-work" },
+  );
   const event = await readFeedEvent(env.hubUrl, env.hubToken, snapshot.cursor, next.id);
   assert.equal(event.event, "delta");
   assert.equal(event.data.type, "post");
   assert.equal(event.data.mid, next.id);
   assert.equal(event.data.committed, true);
   const encoded = JSON.stringify(event);
-  for (const forbidden of [secretText, env.hubToken, env.hubSid, env.hostSid, env.hostRoot]) assert.equal(encoded.includes(forbidden), false);
+  for (const forbidden of [secretText, env.hubToken, env.hubSid, env.hostSid, env.hostRoot])
+    assert.equal(encoded.includes(forbidden), false);
   assert.equal(admitted.id.length > 0, true);
 });
 
@@ -457,9 +616,18 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
     launch: null,
   });
   env.owned.pools.push(pool);
-  const remoteWork = await env.hub.post(env.hubSid, "bounty", { work: { task: "hub-first" } }, { key: "hub-first" });
+  const remoteWork = await env.hub.post(
+    env.hubSid,
+    "bounty",
+    { work: { task: "hub-first" } },
+    { key: "hub-first" },
+  );
   proxy.arm();
-  const uncertain = await pool.claim({ worker: env.worker, localSid: env.hostSid, hubSid: env.hubSid });
+  const uncertain = await pool.claim({
+    worker: env.worker,
+    localSid: env.hostSid,
+    hubSid: env.hubSid,
+  });
   assert.equal(uncertain.state, "uncertain");
   assert.equal(uncertain.board, "bounty");
   assert.ok(proxy.dropped >= 1);
@@ -469,12 +637,24 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
   assert.equal(reserved[0].rid, uncertain.rid);
   assert.equal(reserved[0].authority, env.hub.authority);
 
-  const localWork = await env.host.post(env.hostSid, env.hostBoard, { work: { task: "local-waits" } }, { key: "local-waits" });
-  const blocked = await pool.claim({ worker: env.worker, localSid: env.hostSid, hubSid: env.hubSid });
+  const localWork = await env.host.post(
+    env.hostSid,
+    env.hostBoard,
+    { work: { task: "local-waits" } },
+    { key: "local-waits" },
+  );
+  const blocked = await pool.claim({
+    worker: env.worker,
+    localSid: env.hostSid,
+    hubSid: env.hubSid,
+  });
   assert.equal(blocked.state, "uncertain");
   assert.equal(blocked.rid, uncertain.rid);
   assert.equal(blocked.authority, uncertain.authority);
-  assert.equal((await env.host.list({ board: env.hostBoard, kind: "work" })).items[0].state, "pending");
+  assert.equal(
+    (await env.host.list({ board: env.hostBoard, kind: "work" })).items[0].state,
+    "pending",
+  );
 
   proxy.disarm();
   await waitForFreshRateWindow();
@@ -485,7 +665,7 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
     localSid: env.hostSid,
     hubSid: env.hubSid,
     signal: controller.signal,
-    async execute(item) {
+    execute(item) {
       assert.equal(item.lease.mid, remoteWork.id);
       recovered = item;
       controller.abort();
@@ -507,14 +687,21 @@ test("Pool holds cross-authority capacity through a lost hub claim reply, recove
   assert.equal(recovered.lease.mid, remoteWork.id);
   assert.equal(listCapacity(env.local, { worker: env.worker }).length, 0);
 
-  const localClaim = await pool.claim({ worker: env.worker, localSid: env.hostSid, hubSid: env.hubSid });
+  const localClaim = await pool.claim({
+    worker: env.worker,
+    localSid: env.hostSid,
+    hubSid: env.hubSid,
+  });
   assert.equal(localClaim.state, "claimed");
   assert.equal(localClaim.authority, env.local.authority);
   assert.equal(localClaim.board, env.hostBoard);
   assert.equal(localClaim.lease.mid, localWork.id);
   const settled = await pool.settle({ worker: env.worker, item: localClaim, outcome: "done" });
   assert.equal(settled.state, "settled");
-  assert.equal((await env.host.list({ board: env.hostBoard, kind: "work" })).items[0].state, "done");
+  assert.equal(
+    (await env.host.list({ board: env.hostBoard, kind: "work" })).items[0].state,
+    "done",
+  );
 });
 
 test("native prime child registers before assignment and returns a result for the exact lease", async (t) => {
@@ -529,11 +716,20 @@ test("native prime child registers before assignment and returns a result for th
   let recoveryRelay;
   t.after(async () => {
     await cleanup([
-      async () => { if (recoveryPool) await recoveryPool.close(); },
-      async () => { if (pool) await pool.close(); },
-      async () => { if (recoveryRelay) recoveryRelay.close(); },
+      async () => {
+        if (recoveryPool) await recoveryPool.close();
+      },
+      async () => {
+        if (pool) await pool.close();
+      },
+      () => {
+        if (recoveryRelay) recoveryRelay.close();
+      },
       async () => local.close(),
-      async () => { assertPrivateRoot(root); await rm(root, { recursive: true, force: true }); },
+      async () => {
+        assertPrivateRoot(root);
+        await rm(root, { recursive: true, force: true });
+      },
     ]);
   });
 
@@ -578,7 +774,9 @@ test("native prime child registers before assignment and returns a result for th
     maxBackoffMs: 300,
     launch: null,
   });
-  const reconciled = listLaunches(recoveryRelay, { activeOnly: true }).find((row) => row.id === launch.id);
+  const reconciled = listLaunches(recoveryRelay, { activeOnly: true }).find(
+    (row) => row.id === launch.id,
+  );
   assert.equal(reconciled.state, "running");
   assert.deepEqual(reconciled.handle, launch.handle);
   assert.equal(reconciled.worker, launch.worker);
@@ -588,14 +786,22 @@ test("native prime child registers before assignment and returns a result for th
   recoveryRelay = null;
 
   const board = `host:${device.id}`;
-  const post = local.post(primeSession.id, board, { work: { task: "native-child-result" } }, { key: "prime-job" });
+  const post = local.post(
+    primeSession.id,
+    board,
+    { work: { task: "native-child-result" } },
+    { key: "prime-job" },
+  );
   const controller = new AbortController();
   let fallbackCalled = false;
   const start = pool.start({
     worker: launch.worker,
     localSid: launch.sid,
     signal: controller.signal,
-    async execute() { fallbackCalled = true; return "failed"; },
+    execute() {
+      fallbackCalled = true;
+      return "failed";
+    },
   });
   try {
     await waitFor(() => {
@@ -619,7 +825,7 @@ test("Client refuses an authenticated redirect without forwarding the credential
     res.writeHead(204);
     res.end();
   });
-  const redirector = http.createServer((req, res) => {
+  const redirector = http.createServer((_req, res) => {
     res.writeHead(302, { location: `http://127.0.0.1:${destination.address().port}/v1/health` });
     res.end();
   });
@@ -627,14 +833,25 @@ test("Client refuses an authenticated redirect without forwarding the credential
     await cleanup([
       async () => closeServer(redirector),
       async () => closeServer(destination),
-      async () => { assertPrivateRoot(root); await rm(root, { recursive: true, force: true }); },
+      async () => {
+        assertPrivateRoot(root);
+        await rm(root, { recursive: true, force: true });
+      },
     ]);
   });
-  await new Promise((resolve, reject) => { destination.once("error", reject); destination.listen(0, "127.0.0.1", resolve); });
-  await new Promise((resolve, reject) => { redirector.once("error", reject); redirector.listen(0, "127.0.0.1", resolve); });
+  await new Promise((resolve, reject) => {
+    destination.once("error", reject);
+    destination.listen(0, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve, reject) => {
+    redirector.once("error", reject);
+    redirector.listen(0, "127.0.0.1", resolve);
+  });
   const token = randomBytes(32).toString("base64url");
   const tokenFile = path.join(root, "synthetic.token");
   await privateWrite(tokenFile, `${token}\n`);
-  await assert.rejects(connect({ url: `http://127.0.0.1:${redirector.address().port}`, tokenFile, mode: "local" }));
+  await assert.rejects(
+    connect({ url: `http://127.0.0.1:${redirector.address().port}`, tokenFile, mode: "local" }),
+  );
   assert.equal(captured, 0);
 });

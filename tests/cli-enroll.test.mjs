@@ -12,8 +12,19 @@ test("enroll awaits config loading and reports a missing config", async () => {
   try {
     setup({ root, device: "enroll" });
     let stderr = "";
-    const io = { stdin: null, stdout: { write() {} }, stderr: { write(value) { stderr += value; } } };
-    const code = await main(["enroll", "--root", root, "--config", join(parent, "missing.json")], io);
+    const io = {
+      stdin: null,
+      stdout: { write() {} },
+      stderr: {
+        write(value) {
+          stderr += value;
+        },
+      },
+    };
+    const code = await main(
+      ["enroll", "--root", root, "--config", join(parent, "missing.json")],
+      io,
+    );
     assert.notEqual(code, 0);
     assert.match(stderr, /Config file cannot be read/);
     assert.doesNotMatch(stderr, /config has no fixed hub binding/);

@@ -14,10 +14,21 @@ let identity;
 try {
   const first = await new Promise((resolve, reject) => {
     input.once("line", resolve);
-    input.once("close", () => reject(new Error("parent closed the launch protocol before readiness")));
+    input.once("close", () =>
+      reject(new Error("parent closed the launch protocol before readiness")),
+    );
   });
   const bootstrap = JSON.parse(first);
-  expected(bootstrap, ["v", "event", "id", "nonce", "device", "runtime", "capabilities", "storeRoot"]);
+  expected(bootstrap, [
+    "v",
+    "event",
+    "id",
+    "nonce",
+    "device",
+    "runtime",
+    "capabilities",
+    "storeRoot",
+  ]);
   assert.equal(bootstrap.v, 1);
   assert.equal(bootstrap.event, "bootstrap");
   assert.ok(typeof bootstrap.id === "string" && bootstrap.id.length > 0);
@@ -30,10 +41,18 @@ try {
   const agent = relay.register(bootstrap.runtime, { caps: bootstrap.capabilities });
   const session = relay.join(agent.id);
   identity = { worker: agent.id, sid: session.id, epoch: session.epoch };
-  process.stdout.write(`${JSON.stringify({
-    v: 1, event: "ready", id: bootstrap.id, nonce: bootstrap.nonce,
-    worker: agent.id, sid: session.id, epoch: session.epoch, caps: agent.caps,
-  })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      v: 1,
+      event: "ready",
+      id: bootstrap.id,
+      nonce: bootstrap.nonce,
+      worker: agent.id,
+      sid: session.id,
+      epoch: session.epoch,
+      caps: agent.caps,
+    })}\n`,
+  );
 
   for await (const line of input) {
     const frame = JSON.parse(line);
@@ -47,10 +66,16 @@ try {
     expected(frame.lease, ["id", "mid", "sid", "epoch", "until", "attempt", "kind", "work"]);
     assert.equal(frame.lease.sid, identity.sid);
     assert.equal(frame.lease.kind, "work");
-    process.stdout.write(`${JSON.stringify({
-      v: 1, event: "result", id: bootstrap.id, nonce: bootstrap.nonce,
-      lease: frame.lease.id, outcome: "done",
-    })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({
+        v: 1,
+        event: "result",
+        id: bootstrap.id,
+        nonce: bootstrap.nonce,
+        lease: frame.lease.id,
+        outcome: "done",
+      })}\n`,
+    );
   }
 } finally {
   input.close();

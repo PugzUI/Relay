@@ -4,7 +4,8 @@ const PREFIX = "Relay pending state changed. Read current state before acting.\n
 
 /** Format a payload-free notice and return the exact scope rows included in it. */
 export function formatDeliveryNotice(scopes, limit = LIMITS.deliveryNoticeBytes) {
-  if (!Array.isArray(scopes) || !Number.isSafeInteger(limit) || limit < 1) throw new TypeError("Invalid delivery notice input");
+  if (!Array.isArray(scopes) || !Number.isSafeInteger(limit) || limit < 1)
+    throw new TypeError("Invalid delivery notice input");
   const included = [];
   let text = PREFIX;
   for (const scope of scopes) {

@@ -23,20 +23,41 @@ try {
   const recovered = relay.claim(sid, { board });
   if (!recovered) throw new Error("expired work did not become claimable");
   const receipt = relay.ack(sid, recovered.id, "done");
-  process.stdout.write(`${JSON.stringify({ interruptedAttempt: interrupted.id, recoveredAttempt: recovered.id, attempt: recovered.attempt, receipt: { mid: receipt.mid, lease: receipt.lease, epoch: receipt.epoch, outcome: receipt.outcome, time: receipt.time } }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ interruptedAttempt: interrupted.id, recoveredAttempt: recovered.id, attempt: recovered.attempt, receipt: { mid: receipt.mid, lease: receipt.lease, epoch: receipt.epoch, outcome: receipt.outcome, time: receipt.time } }, null, 2)}\n`,
+  );
 } catch (error) {
   failure = error;
-  throw error;
-} finally {
-  const cleanup = [];
-  if (relay && sid) {
-    try { relay.leave(sid); } catch (error) { if (!new Set(["session", "expired"]).has(error.code)) cleanup.push(error); }
-  }
-  try { relay?.close(); } catch (error) { cleanup.push(error); }
-  if (!resolve(root).startsWith(resolve(parent) + sep)) cleanup.push(new Error("refusing to remove a root outside the owned temporary directory"));
-  try { await rm(parent, { recursive: true, force: true }); } catch (error) { cleanup.push(error); }
-  if (cleanup.length) {
-    if (failure) process.stderr.write(`cleanup after primary failure: ${cleanup.map((error) => error.message).join("; ")}\n`);
-    else throw new AggregateError(cleanup, "example cleanup failed");
+}
+
+const cleanup = [];
+if (relay && sid) {
+  try {
+    relay.leave(sid);
+  } catch (error) {
+    if (!new Set(["session", "expired"]).has(error.code)) cleanup.push(error);
   }
 }
+try {
+  relay?.close();
+} catch (error) {
+  cleanup.push(error);
+}
+if (!resolve(root).startsWith(resolve(parent) + sep)) {
+  cleanup.push(new Error("refusing to remove a root outside the owned temporary directory"));
+} else {
+  try {
+    await rm(parent, { recursive: true, force: true });
+  } catch (error) {
+    cleanup.push(error);
+  }
+}
+if (failure) {
+  if (cleanup.length) {
+    process.stderr.write(
+      `cleanup after primary failure: ${cleanup.map((error) => error.message).join("; ")}\n`,
+    );
+  }
+  throw failure;
+}
+if (cleanup.length) throw new AggregateError(cleanup, "example cleanup failed");

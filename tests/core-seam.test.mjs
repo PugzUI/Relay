@@ -12,7 +12,9 @@ test("relayRoot returns the canonical open store root and rejects invalid or clo
   assert.equal(Object.getOwnPropertyDescriptor(relay._store, "root").writable, false);
   assert.throws(() => relayRoot(null), { code: "input" });
   assert.throws(() => relayRoot(Object.create(Relay.prototype)), { code: "input" });
-  assert.throws(() => relayRoot(new Relay({ root: realpathSync(root), db: {}, closed: false })), { code: "input" });
+  assert.throws(() => relayRoot(new Relay({ root: realpathSync(root), db: {}, closed: false })), {
+    code: "input",
+  });
   relay.close();
   assert.throws(() => relayRoot(relay), { code: "storage" });
 });
@@ -23,7 +25,8 @@ test("relayRoot stays internal to src/relay.mjs", () => {
 });
 
 test("snapshot boards and list pages match their declared wire fields", (t) => {
-  const relay = open({ root: temporaryRoot(t), device: "wire-seam" }); t.after(() => relay.close());
+  const relay = open({ root: temporaryRoot(t), device: "wire-seam" });
+  t.after(() => relay.close());
   const worker = relay.register("worker");
   const session = relay.join(worker.id);
   const board = `host:${relay.device.id}`;
@@ -31,12 +34,41 @@ test("snapshot boards and list pages match their declared wire fields", (t) => {
 
   const snapshot = relay.snapshot();
   assert.deepEqual(Object.keys(snapshot.boards[0]).sort(), [
-    "authority", "claimed", "device", "id", "inbox", "kind", "pending", "receivedAt", "reported", "terminal",
+    "authority",
+    "claimed",
+    "device",
+    "id",
+    "inbox",
+    "kind",
+    "pending",
+    "receivedAt",
+    "reported",
+    "terminal",
   ]);
 
   const page = relay.list({ board, data: true });
-  assert.deepEqual(Object.keys(page).sort(), ["complete", "cursor", "firstSeq", "items", "next", "pruned", "total", "visible"]);
+  assert.deepEqual(Object.keys(page).sort(), [
+    "complete",
+    "cursor",
+    "firstSeq",
+    "items",
+    "next",
+    "pruned",
+    "total",
+    "visible",
+  ]);
   assert.deepEqual(Object.keys(page.items[0]).sort(), [
-    "acked", "board", "data", "from", "id", "init", "kind", "needs", "seq", "series", "state", "to",
+    "acked",
+    "board",
+    "data",
+    "from",
+    "id",
+    "init",
+    "kind",
+    "needs",
+    "seq",
+    "series",
+    "state",
+    "to",
   ]);
 });

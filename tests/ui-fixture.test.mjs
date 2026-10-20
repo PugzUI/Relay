@@ -11,9 +11,20 @@ import { fixtureOptions } from "./fixtures/ui/store.mjs";
 import { connect } from "../src/index.mjs";
 
 test("default fixture options remain offline regardless of serve environment", () => {
-  assert.deepEqual(fixtureOptions([], { RELAY_FIXTURE_PORT: "invalid", RELAY_FIXTURE_DURATION_MS: "invalid" }), { serve: false });
-  assert.deepEqual(fixtureOptions(["--serve"], {}), { serve: true, port: 4200, durationMs: 300_000 });
-  assert.deepEqual(fixtureOptions(["--serve", "--port", "4312", "--duration-ms", "2000"], {}), { serve: true, port: 4312, durationMs: 2000 });
+  assert.deepEqual(
+    fixtureOptions([], { RELAY_FIXTURE_PORT: "invalid", RELAY_FIXTURE_DURATION_MS: "invalid" }),
+    { serve: false },
+  );
+  assert.deepEqual(fixtureOptions(["--serve"], {}), {
+    serve: true,
+    port: 4200,
+    durationMs: 300_000,
+  });
+  assert.deepEqual(fixtureOptions(["--serve", "--port", "4312", "--duration-ms", "2000"], {}), {
+    serve: true,
+    port: 4312,
+    durationMs: 2000,
+  });
   assert.throws(() => fixtureOptions(["--port", "4312"], {}), /require --serve/);
   assert.throws(() => fixtureOptions(["--serve", "--port", "0"], {}), /out of range/);
   assert.throws(() => fixtureOptions(["--serve", "--duration-ms", "999"], {}), /at least 1000/);
@@ -26,7 +37,9 @@ test("store fixture prints receipts without starting a listener or exposing sess
   assert.equal(output.inbox.total, 1);
   assert.equal(output.work.total, 1);
   assert.equal(output.consumed.flat().length, 2);
-  assert.ok(output.consumed.flat().every((receipt) => receipt.outcome === "done" && receipt.result));
+  assert.ok(
+    output.consumed.flat().every((receipt) => receipt.outcome === "done" && receipt.result),
+  );
   assert.equal("url" in output, false);
   assert.equal(/"sid"\s*:|"sessionId"\s*:/i.test(result.stdout), false);
 });
@@ -42,7 +55,7 @@ test("serve mode refuses an existing token destination without changing it", asy
   assert.equal(result.code, 1);
   assert.match(result.stderr, /fixture failed/);
   assert.match(result.stderr, /EEXIST/);
-  assert.equal((await readFile(target, "utf8")), "operator data\n");
+  assert.equal(await readFile(target, "utf8"), "operator data\n");
   assert.equal((await lstat(tokenFile)).isSymbolicLink(), true);
 });
 
@@ -58,19 +71,39 @@ test("serve mode writes a private token, reports only its path, and cleans up on
     await rm(parent, { recursive: true, force: true });
   });
   const port = await freePort();
-  child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/ui/store.mjs", import.meta.url)), "--serve", "--port", String(port), "--duration-ms", "30000"], {
-    shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, RELAY_FIXTURE_TOKEN_FILE: tokenFile },
-  });
+  child = spawn(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./fixtures/ui/store.mjs", import.meta.url)),
+      "--serve",
+      "--port",
+      String(port),
+      "--duration-ms",
+      "30000",
+    ],
+    {
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, RELAY_FIXTURE_TOKEN_FILE: tokenFile },
+    },
+  );
   let stdout = "";
   let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+  });
   const ready = await Promise.race([
     once(child.stdout, "data").then(() => true),
-    once(child, "exit").then(([code]) => { throw new Error(`fixture exited before ready (${code}): ${stderr}`); }),
-    new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("fixture did not become ready")), 10_000); timer.unref(); }),
+    once(child, "exit").then(([code]) => {
+      throw new Error(`fixture exited before ready (${code}): ${stderr}`);
+    }),
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error("fixture did not become ready")), 10_000);
+      timer.unref();
+    }),
   ]);
   assert.equal(ready, true);
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -90,9 +123,18 @@ test("serve mode writes a private token, reports only its path, and cleans up on
       await client.list({ board, kind: "msg", data: true });
       await client.list({ board, kind: "work", data: true });
     }
-    await assert.rejects(client.register("worker", { slot: "001" }), (error) => error.code === "denied");
-    await assert.rejects(client.post("invalid-session", "bounty", { msg: "denied" }), (error) => error.code === "denied");
-    await assert.rejects(client.claim("invalid-session", { board: "bounty" }), (error) => error.code === "denied");
+    await assert.rejects(
+      client.register("worker", { slot: "001" }),
+      (error) => error.code === "denied",
+    );
+    await assert.rejects(
+      client.post("invalid-session", "bounty", { msg: "denied" }),
+      (error) => error.code === "denied",
+    );
+    await assert.rejects(
+      client.claim("invalid-session", { board: "bounty" }),
+      (error) => error.code === "denied",
+    );
     await assert.rejects(client.stats(), (error) => error.code === "denied");
   } finally {
     await client.close();
@@ -106,12 +148,19 @@ test("serve mode writes a private token, reports only its path, and cleans up on
 });
 
 async function runFixture(args, env = process.env) {
-  const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/ui/store.mjs", import.meta.url)), ...args], { shell: false, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
-  const output = (stream) => new Promise((resolve) => {
-    let value = "";
-    stream.setEncoding("utf8").on("data", (chunk) => { value += chunk; });
-    stream.on("end", () => resolve(value));
-  });
+  const child = spawn(
+    process.execPath,
+    [fileURLToPath(new URL("./fixtures/ui/store.mjs", import.meta.url)), ...args],
+    { shell: false, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } },
+  );
+  const output = (stream) =>
+    new Promise((resolve) => {
+      let value = "";
+      stream.setEncoding("utf8").on("data", (chunk) => {
+        value += chunk;
+      });
+      stream.on("end", () => resolve(value));
+    });
   const stdout = output(child.stdout);
   const stderr = output(child.stderr);
   const [code] = await once(child, "exit");
@@ -123,6 +172,8 @@ async function freePort() {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   return port;
 }
