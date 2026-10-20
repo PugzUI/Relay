@@ -193,10 +193,8 @@ footer {
   --dv-border-radius: var(--r-none);
 }
 /* Dockview sizes the floating overlay host with an inline width that can lag a
-   viewport resize. The stale width is wider than the shell, so it widens the
-   document scroll area and produces a horizontal scrollbar at narrow widths.
-   The host has no inline max-width, so this cap applies and keeps the used
-   width at the shell width. */
+   viewport resize, and the stale width widens the document scroll area. The
+   host sets no inline max-width, so this cap applies. */
 .dv-floating-overlay-host {
   max-width: 100%;
 }
