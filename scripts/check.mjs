@@ -47,6 +47,7 @@ for (const path of sourceFiles) {
   if (result.status !== 0) failures.push(`syntax: ${path}\n${result.stderr.trim()}`);
 }
 console.log(`syntax: checked ${sourceFiles.length} JavaScript module(s)`);
+console.log(`syntax population: ${[...sourceFiles].sort().join(", ")}`);
 
 const expectedExports = [
   "Broker",
@@ -75,6 +76,7 @@ if (JSON.stringify(actualExports) !== JSON.stringify([...expectedExports].sort()
   );
 } else {
   console.log(`exports: ${actualExports.length} frozen runtime exports`);
+  console.log(`exports population: ${actualExports.join(", ")}`);
 }
 
 const compiler = join(root, "node_modules/typescript/bin/tsc");
@@ -296,6 +298,7 @@ try {
         console.log(
           `packaging: validated ${packedPaths.length} emitted file(s), runtime entries, and private-artifact exclusions`,
         );
+        console.log(`packaging population: ${[...packedPaths].sort().join(", ")}`);
       }
     } catch (error) {
       failures.push(`packaging: manifest/files check failed (${error.message})`);
