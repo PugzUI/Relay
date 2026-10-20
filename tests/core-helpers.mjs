@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 export function temporaryRoot(t) {
   const parent = mkdtempSync(join(tmpdir(), "relay-core-"));
   const root = join(parent, "store");
   t.after(() => {
-    if (!resolve(root).startsWith(`${resolve(parent)}/`)) {
+    if (!resolve(root).startsWith(`${resolve(parent)}${sep}`)) {
       throw new Error("Refusing unsafe test cleanup");
     }
     rmSync(parent, { recursive: true, force: true });
