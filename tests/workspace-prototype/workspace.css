@@ -192,6 +192,14 @@ footer {
   --dv-tab-font-family: var(--f-mono);
   --dv-border-radius: var(--r-none);
 }
+/* Dockview sizes the floating overlay host with an inline width that can lag a
+   viewport resize. The stale width is wider than the shell, so it widens the
+   document scroll area and produces a horizontal scrollbar at narrow widths.
+   The host has no inline max-width, so this cap applies and keeps the used
+   width at the shell width. */
+.dv-floating-overlay-host {
+  max-width: 100%;
+}
 .signal-wire {
   stroke-dasharray: 10 300;
   animation: signal 1s linear 1;
