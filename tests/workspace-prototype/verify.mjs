@@ -45,6 +45,90 @@ const controlHeight = (target) =>
   target.evaluate(() =>
     window.matchMedia("(max-width: 760px), (pointer: coarse)").matches ? 44 : 36,
   );
+// The widths the ladder visits. They are declared once, so the coverage
+// guard below and the measurements above cannot drift apart: a guard that
+// checked a different set of widths than the ladder measured would claim a
+// coverage the ladder does not have.
+const ladderWidths = [1050, 1024, 800, 780, 760, 600, 390, 320];
+// How a media condition's widths are read.
+//
+// A WIDTH BAND is a media condition that carries BOTH a lower and an upper
+// width bound. A defect confined to such a band is active at every width
+// inside it, so a single width inside the band catches it - but only if the
+// ladder visits one. The bands are read from the stylesheets the page
+// actually SERVED, so a band the product declares is a band the harness
+// knows about. px, em and rem are comparable (a media query's em is the
+// initial font size, 16px); a width in any other unit is reported rather
+// than skipped.
+//
+// One width bound of one condition part. A bound the guard cannot compare
+// is reported (value null), never skipped: a bound that exists and cannot
+// be read must fail the guard, not disappear from it.
+const widthBound = (text, name) => {
+  if (!new RegExp(`${name}\\s*:`).test(text)) return null;
+  const exact = new RegExp(`\\(\\s*${name}\\s*:\\s*([0-9.]+)(px|em|rem)\\s*\\)`).exec(text);
+  if (!exact) return { value: null };
+  return { value: Math.round(Number(exact[1]) * (exact[2] === "px" ? 1 : 16)) };
+};
+// One comma-separated part of one media condition: a band (both bounds), a
+// threshold (one bound), an unreadable width (a bound that exists but cannot
+// be compared) or no width at all.
+const parseBandPart = (text) => {
+  const min = widthBound(text, "min-width");
+  const max = widthBound(text, "max-width");
+  if (!min && !max) return { kind: "none" };
+  if (min && max) {
+    if (min.value === null || max.value === null) return { kind: "unparsed" };
+    return { kind: "band", min: min.value, max: max.value };
+  }
+  const single = min ?? max;
+  return single.value === null ? { kind: "unparsed" } : { kind: "threshold" };
+};
+// The comma-separated parts of every media condition, each with the
+// stylesheet it came from.
+const conditionParts = (conditions) =>
+  conditions.flatMap((condition) =>
+    condition.conditionText
+      .split(",")
+      .map((part) => part.trim())
+      .filter((text) => text.length > 0)
+      .map((text) => ({ href: condition.href, conditionText: text })),
+  );
+const parseWidthBands = (conditions) => {
+  const bands = [];
+  const thresholds = [];
+  const unparsed = [];
+  for (const part of conditionParts(conditions)) {
+    const parsed = parseBandPart(part.conditionText);
+    if (parsed.kind === "band") bands.push({ ...part, min: parsed.min, max: parsed.max });
+    else if (parsed.kind === "threshold") thresholds.push(part);
+    else if (parsed.kind === "unparsed") unparsed.push(part);
+  }
+  return { bands, thresholds, unparsed };
+};
+// The stylesheets the page actually served, read through the CSSOM of the
+// live page rather than from a file list: the prototype serves the
+// PRODUCTION stylesheet (server.mjs maps /relay-style.css to
+// ../../ui/style.css), so a file-scoped read would miss every production
+// branch, and a stylesheet that failed to load would be read as an empty
+// one.
+const servedStylesheets = (target) =>
+  target.evaluate(() => {
+    const sheets = [...document.styleSheets].map((sheet) => {
+      try {
+        return {
+          href: sheet.href ?? "(inline)",
+          rules: [...sheet.cssRules].map((rule) => ({
+            type: rule.type,
+            conditionText: rule.conditionText ?? null,
+          })),
+        };
+      } catch (error) {
+        return { href: sheet.href ?? "(inline)", rules: null, error: String(error) };
+      }
+    });
+    return { sheets };
+  });
 const listener = createServer();
 await new Promise((resolve, reject) => {
   listener.once("error", reject);
@@ -142,6 +226,46 @@ try {
     false,
     `horizontal overflow at 1500px on the desktop page: scrollWidth ${desktopOverflow.scrollWidth} > innerWidth ${desktopOverflow.innerWidth} (offender ${desktopOverflow.offender ?? "none"} right=${desktopOverflow.offenderRight ?? 0}px)`,
   );
+  // The width-band guard. A finite ladder cannot visit every width, so a
+  // defect confined to a window the ladder never samples is invisible to it:
+  // measured at the published tip, 9 of 9 maximal invisible windows pass the
+  // ladder. The guard closes that class the only way it can be closed, from
+  // the product's OWN conditions. Every media condition in the served
+  // stylesheets that carries BOTH a lower and an upper width bound must
+  // contain a width the ladder visits, because a defect confined to such a
+  // band is active at every width inside it. The band count is reported, so
+  // a pass with zero bands is legible as vacuous rather than as coverage.
+  const stylesheets = await servedStylesheets(page);
+  const unread = stylesheets.sheets
+    .filter((sheet) => sheet.error)
+    .map((sheet) => `${sheet.href}: ${sheet.error}`);
+  assert.deepEqual(unread, [], `a served stylesheet could not be read: ${unread.join("; ")}`);
+  const conditions = stylesheets.sheets.flatMap((sheet) =>
+    (sheet.rules ?? [])
+      .filter((rule) => rule.type === 4 && rule.conditionText)
+      .map((rule) => ({ href: sheet.href, conditionText: rule.conditionText })),
+  );
+  assert.ok(conditions.length > 0, "no media condition was read from the served stylesheets");
+  assert.ok(
+    conditions.some((condition) => /max-width\s*:\s*760px/.test(condition.conditionText)),
+    "the product's own control-height width bound was not read from the served stylesheets",
+  );
+  assert.ok(
+    conditions.some((condition) => /pointer\s*:\s*coarse/.test(condition.conditionText)),
+    "the product's own pointer bound was not read from the served stylesheets",
+  );
+  const { bands, thresholds, unparsed } = parseWidthBands(conditions);
+  assert.deepEqual(
+    unparsed.map((entry) => `${entry.href}: ${entry.conditionText}`),
+    [],
+    "a width condition could not be compared with the ladder's widths",
+  );
+  for (const band of bands) {
+    assert.ok(
+      ladderWidths.some((width) => width >= band.min && width <= band.max),
+      `width band with no ladder sample: ${band.href}: ${band.conditionText} => [${band.min},${band.max}] (bands found: ${bands.length})`,
+    );
+  }
   const alpha = await page.evaluate(() => workspaceStudy.state.workers[0].id);
   await page.locator(".x6-node").filter({ hasText: "ALPHA" }).click();
   await page.waitForFunction(() => workspaceStudy.sessionPanels.size === 1, null, { polling: 100 });
@@ -260,8 +384,11 @@ try {
   // overflows from the window's low edge, so every boundary is also sampled
   // just above it: 780 sits immediately above the 760px branch, and 1024
   // immediately below the 1050px sample, so a window confined to (760,780]
-  // or (1024,1050] is visible to the ladder.
-  for (const width of [1050, 1024, 800, 780, 760, 600, 390, 320]) {
+  // or (1024,1050] is visible to the ladder. What the ladder does not
+  // visit is covered by the width-band guard above, for every band the
+  // product DECLARES; a window the product does not declare is outside the
+  // product's own conditions and outside this harness's reach.
+  for (const width of ladderWidths) {
     await page.setViewportSize({ width, height: 1000 });
     await page.click("#reset");
     await page.waitForTimeout(150);
@@ -412,6 +539,7 @@ try {
       "96×44 controls on a coarse pointer at 1500px without page overflow",
       "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
+      "every width band the served stylesheets declare is visited by the ladder",
     ],
     desktopViewport: {
       measurements: desktopMeasurements.length,
@@ -432,6 +560,14 @@ try {
       measurements: coarseMeasurements.length,
       overflows: coarseMeasurements.filter((m) => m.scrollWidth > m.innerWidth).length,
       results: coarseMeasurements,
+    },
+    widthBandGuard: {
+      sheets: stylesheets.sheets.map((sheet) => sheet.href),
+      mediaConditions: conditions.length,
+      widthBands: bands.length,
+      widthThresholds: thresholds.length,
+      ladderWidths,
+      bands,
     },
     evidence,
   };
