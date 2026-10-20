@@ -48,8 +48,11 @@ const controlHeight = (target) =>
 // The widths the ladder visits. They are declared once, so the coverage
 // guard below and the measurements above cannot drift apart: a guard that
 // checked a different set of widths than the ladder measured would claim a
-// coverage the ladder does not have.
-const ladderWidths = [1050, 1024, 800, 780, 760, 600, 390, 320];
+// coverage the ladder does not have. The widest sample sits just above the
+// product's widest declared width bound (1100px, ui/style.css:965): a
+// threshold is the boundary between two regimes, and a defect confined to
+// one of them is invisible to a ladder that samples only one side.
+const ladderWidths = [1101, 1050, 1024, 800, 780, 760, 600, 390, 320];
 // How a media condition's widths are read.
 //
 // A WIDTH BAND is a media condition that carries BOTH a lower and an upper
@@ -82,7 +85,10 @@ const parseBandPart = (text) => {
     return { kind: "band", min: min.value, max: max.value };
   }
   const single = min ?? max;
-  return single.value === null ? { kind: "unparsed" } : { kind: "threshold" };
+  if (single.value === null) return { kind: "unparsed" };
+  return min
+    ? { kind: "threshold", bound: "min", value: min.value }
+    : { kind: "threshold", bound: "max", value: max.value };
 };
 // The comma-separated parts of every media condition, each with the
 // stylesheet it came from.
@@ -101,10 +107,27 @@ const parseWidthBands = (conditions) => {
   for (const part of conditionParts(conditions)) {
     const parsed = parseBandPart(part.conditionText);
     if (parsed.kind === "band") bands.push({ ...part, min: parsed.min, max: parsed.max });
-    else if (parsed.kind === "threshold") thresholds.push(part);
+    else if (parsed.kind === "threshold")
+      thresholds.push({ ...part, bound: parsed.bound, value: parsed.value });
     else if (parsed.kind === "unparsed") unparsed.push(part);
   }
   return { bands, thresholds, unparsed };
+};
+// The two sides of one width threshold, as the ladder's own widths fall.
+// A threshold's own side is the side its bound selects; the other side is
+// the one the bound excludes. A defect confined to one side is active only
+// there, so the ladder has to visit a width on EACH side of a threshold for
+// the coverage to be real. The population is the ladder's declared widths,
+// not every width the harness happens to measure: a threshold that only the
+// desktop gate brackets would then pass without the ladder covering it.
+const thresholdSides = (threshold) => {
+  const own = ladderWidths.filter((width) =>
+    threshold.bound === "min" ? width >= threshold.value : width <= threshold.value,
+  );
+  const other = ladderWidths.filter((width) =>
+    threshold.bound === "min" ? width < threshold.value : width > threshold.value,
+  );
+  return { own, other };
 };
 // The stylesheets the page actually served, read through the CSSOM of the
 // live page rather than from a file list: the prototype serves the
@@ -114,14 +137,44 @@ const parseWidthBands = (conditions) => {
 // one.
 const servedStylesheets = (target) =>
   target.evaluate(() => {
+    // The rules are walked RECURSIVELY, not read from the top level only: a
+    // media rule can be nested inside @supports, @layer, @scope or
+    // @container, and a band declared in a nested rule is as much a band as
+    // one declared at the top level. Two facts decide what a nested rule
+    // means for the WIDTH guard. A media query is relative to the VIEWPORT
+    // wherever it is nested - even inside an @container, whose own
+    // condition is relative to the CONTAINER and is therefore not a width
+    // band at all - so a nested band is guarded like any other. A
+    // @supports block whose condition this browser does not satisfy never
+    // applies, so the rules inside it cannot manifest: they are reported
+    // rather than asserted, because the guard must not demand a viewport
+    // sample for a rule the viewport will never apply.
+    const isMedia = (rule) => rule.type === 4 && Boolean(rule.conditionText);
+    const isUnsupported = (rule) =>
+      rule.type === 12 && Boolean(rule.conditionText) && !CSS.supports(rule.conditionText);
+    const childRules = (rule) => (rule.cssRules ? [...rule.cssRules] : []);
+    const collect = (rules, out, context) => {
+      for (const rule of rules) {
+        if (isMedia(rule)) {
+          out.push({
+            conditionText: rule.conditionText,
+            nested: context.nested,
+            inert: context.inert,
+          });
+        }
+        const children = childRules(rule);
+        if (children.length === 0) continue;
+        const inert = context.inert || isUnsupported(rule);
+        collect(children, out, { nested: true, inert });
+      }
+    };
     const sheets = [...document.styleSheets].map((sheet) => {
       try {
+        const rules = [];
+        collect([...sheet.cssRules], rules, { nested: false, inert: false });
         return {
           href: sheet.href ?? "(inline)",
-          rules: [...sheet.cssRules].map((rule) => ({
-            type: rule.type,
-            conditionText: rule.conditionText ?? null,
-          })),
+          rules,
         };
       } catch (error) {
         return { href: sheet.href ?? "(inline)", rules: null, error: String(error) };
@@ -241,20 +294,22 @@ try {
     .map((sheet) => `${sheet.href}: ${sheet.error}`);
   assert.deepEqual(unread, [], `a served stylesheet could not be read: ${unread.join("; ")}`);
   const conditions = stylesheets.sheets.flatMap((sheet) =>
-    (sheet.rules ?? [])
-      .filter((rule) => rule.type === 4 && rule.conditionText)
-      .map((rule) => ({ href: sheet.href, conditionText: rule.conditionText })),
+    (sheet.rules ?? []).map((rule) => ({ href: sheet.href, ...rule })),
   );
   assert.ok(conditions.length > 0, "no media condition was read from the served stylesheets");
+  // A condition that cannot manifest in this browser does not satisfy the
+  // non-vacuity check: the point of the check is that the product's OWN
+  // bound was read where it applies.
+  const applicable = conditions.filter((condition) => !condition.inert);
   assert.ok(
-    conditions.some((condition) => /max-width\s*:\s*760px/.test(condition.conditionText)),
+    applicable.some((condition) => /max-width\s*:\s*760px/.test(condition.conditionText)),
     "the product's own control-height width bound was not read from the served stylesheets",
   );
   assert.ok(
-    conditions.some((condition) => /pointer\s*:\s*coarse/.test(condition.conditionText)),
+    applicable.some((condition) => /pointer\s*:\s*coarse/.test(condition.conditionText)),
     "the product's own pointer bound was not read from the served stylesheets",
   );
-  const { bands, thresholds, unparsed } = parseWidthBands(conditions);
+  const { bands, thresholds, unparsed } = parseWidthBands(applicable);
   assert.deepEqual(
     unparsed.map((entry) => `${entry.href}: ${entry.conditionText}`),
     [],
@@ -264,6 +319,24 @@ try {
     assert.ok(
       ladderWidths.some((width) => width >= band.min && width <= band.max),
       `width band with no ladder sample: ${band.href}: ${band.conditionText} => [${band.min},${band.max}] (bands found: ${bands.length})`,
+    );
+  }
+  // A THRESHOLD is a media condition with ONE width bound: the product
+  // switches behaviour at that width, so a defect confined to one side of it
+  // is active only on that side. The ladder must therefore visit a width on
+  // EACH side of every threshold the product declares - a ladder that
+  // samples only the wide side cannot see a defect only the narrow side
+  // has, and one that samples only the narrow side cannot see a defect the
+  // wide side has. The population is the ladder's own declared widths, so a
+  // threshold that only the desktop gate (one width above the ladder)
+  // brackets cannot pass this guard. A threshold the ladder cannot bracket
+  // FAILS instead of being skipped: the product declared a regime the
+  // harness does not cover, and saying so is the point of the check.
+  for (const threshold of thresholds) {
+    const { own, other } = thresholdSides(threshold);
+    assert.ok(
+      own.length > 0 && other.length > 0,
+      `width threshold with no ladder sample on one side: ${threshold.href}: ${threshold.conditionText} => ${threshold.value} (side missing: ${other.length === 0 ? "the other side" : "its own side"}; thresholds found: ${thresholds.length})`,
     );
   }
   const alpha = await page.evaluate(() => workspaceStudy.state.workers[0].id);
@@ -382,9 +455,10 @@ try {
   // above 850 are reachable only by widths an edge-only ladder never visits.
   // A defect confined to a WINDOW of widths (a media query with two bounds)
   // overflows from the window's low edge, so every boundary is also sampled
-  // just above it: 780 sits immediately above the 760px branch, and 1024
-  // immediately below the 1050px sample, so a window confined to (760,780]
-  // or (1024,1050] is visible to the ladder. What the ladder does not
+  // just above it: 780 sits immediately above the 760px branch, 1024
+  // immediately below the 1050px sample, and 1101 immediately above the
+  // 1100px production branch, so a window confined to (760,780],
+  // (1024,1050] or (1100,1101] is visible to the ladder. What the ladder does not
   // visit is covered by the width-band guard above, for every band the
   // product DECLARES; a window the product does not declare is outside the
   // product's own conditions and outside this harness's reach.
@@ -535,11 +609,12 @@ try {
       "worker continues during feed disconnect; reconnect has no duplicate ack",
       "shell and unauthenticated commands rejected",
       "760 / 600 / 390 / 320px without page overflow",
-      "1024 / 1050 / 800 / 780px without page overflow",
+      "1101 / 1050 / 1024 / 800 / 780px without page overflow",
       "96×44 controls on a coarse pointer at 1500px without page overflow",
       "320px without page overflow while the layout re-sync is frozen",
       "zero unexpected browser errors",
-      "every width band the served stylesheets declare is visited by the ladder",
+      "every applicable width band the served stylesheets declare is visited by the ladder",
+      "every applicable width threshold the served stylesheets declare is visited on both sides by the ladder",
     ],
     desktopViewport: {
       measurements: desktopMeasurements.length,
@@ -564,10 +639,30 @@ try {
     widthBandGuard: {
       sheets: stylesheets.sheets.map((sheet) => sheet.href),
       mediaConditions: conditions.length,
+      nestedMediaConditions: conditions.filter((condition) => condition.nested).length,
+      inertMediaConditions: conditions.length - applicable.length,
       widthBands: bands.length,
       widthThresholds: thresholds.length,
       ladderWidths,
       bands,
+      thresholds: thresholds.map((threshold) => {
+        const { own, other } = thresholdSides(threshold);
+        return {
+          href: threshold.href,
+          conditionText: threshold.conditionText,
+          bound: threshold.bound,
+          value: threshold.value,
+          ownSideSamples: own,
+          otherSideSamples: other,
+        };
+      }),
+      excludedConditions: conditions
+        .filter((condition) => condition.inert)
+        .map((condition) => ({
+          href: condition.href,
+          conditionText: condition.conditionText,
+          reason: "the enclosing @supports condition is not satisfied by this browser",
+        })),
     },
     evidence,
   };
