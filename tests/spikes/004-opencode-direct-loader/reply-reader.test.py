@@ -1,17 +1,25 @@
 """Reply-decoder regressions only; these do not qualify native delivery."""
 
 import ast
-from pathlib import Path
 import time
 import unittest
+from pathlib import Path
 
 
 class ReplyReaderTests(unittest.TestCase):
     def test_only_the_exact_completed_reply_is_accepted(self):
         runner = Path(__file__).resolve().parents[1] / "001-opencode-version-boundary" / "run.py"
         module = ast.parse(runner.read_text())
-        main = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-        reader = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == "wait_reply")
+        main = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        reader = next(
+            node
+            for node in main.body
+            if isinstance(node, ast.FunctionDef) and node.name == "wait_reply"
+        )
         code = compile(ast.Module(body=[reader], type_ignores=[]), str(runner), "exec")
         expected = "DELIVERED_FIXTURE"
         cases = [
@@ -21,18 +29,28 @@ class ReplyReaderTests(unittest.TestCase):
             ("quoted challenge", '"' + expected + '"', "stop", None, False),
             ("summary", "Summary: " + expected, "stop", None, False),
             ("truncated", expected, "length", None, False),
-            ("errored", expected, "stop", {"type": "provider.auth", "message": "fixture refusal", "status": 403}, False),
+            (
+                "errored",
+                expected,
+                "stop",
+                {"type": "provider.auth", "message": "fixture refusal", "status": 403},
+                False,
+            ),
         ]
         for label, text, finish, error, accepted in cases:
             with self.subTest(label=label):
-                message = {"type": "assistant", "content": [{"type": "text", "text": text}], "finish": finish}
+                message = {
+                    "type": "assistant",
+                    "content": [{"type": "text", "text": text}],
+                    "finish": finish,
+                }
                 if error is not None:
                     message["error"] = error
                 report = {}
                 context = {
                     "time": time,
                     "report": report,
-                    "request": lambda *args: {"data": [message]},
+                    "request": lambda *args, _message=message: {"data": [_message]},
                     "unbox": lambda value: value["data"],
                 }
                 exec(code, context)
