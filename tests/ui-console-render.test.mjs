@@ -56,7 +56,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1244,16 +1244,55 @@ function censusReport(observation) {
   return { total, uncovered, sites };
 }
 
-// The corpus check: the carrier's own loader transform is applied to every tracked source
-// file, and every result must still parse. A transform that corrupts a file is a probe
-// defect, and a swallowed exception would shrink the denominator, so failures are counted
-// with their file name and the processed count is asserted against the file count.
+// The corpus check: the carrier's own loader transform is applied to every source file of
+// the population, and every result must still parse. A transform that corrupts a file is a
+// probe defect, and a swallowed exception would shrink the denominator, so failures are
+// counted with their file name and the processed count is asserted against the file count.
+//
+// The population is NAMED and it is enumerated without assuming a git checkout: in a
+// checkout it is the tracked JavaScript files, and in a pristine extraction - where there
+// is no index to read - it is the JavaScript files of the tree. The report says which
+// population ran, so the denominator is never a number without a name.
+const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "coverage"]);
+
+function isSourceFile(name) {
+  return name.endsWith(".mjs") || name.endsWith(".js");
+}
+
+function isSkippedDirectory(name) {
+  return name.startsWith(".") || SKIPPED_DIRECTORIES.has(name);
+}
+
+function treeSourceFiles() {
+  const files = [];
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!isSkippedDirectory(entry.name)) walk(join(directory, entry.name));
+        continue;
+      }
+      if (isSourceFile(entry.name)) files.push(join(directory, entry.name));
+    }
+  };
+  walk(ROOT);
+  return files;
+}
+
 function trackedFiles() {
-  const output = execFileSync("git", ["ls-files", "*.mjs", "*.js"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-  return output.split("\n").filter((line) => line.length > 0);
+  try {
+    const output = execFileSync("git", ["ls-files", "*.mjs", "*.js"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const files = output.split("\n").filter((line) => line.length > 0);
+    if (files.length > 0) {
+      return { population: "the tracked JavaScript files", files };
+    }
+  } catch {
+    // Not a git checkout: the tree population below is used instead.
+  }
+  return { population: "the JavaScript files of the tree", files: treeSourceFiles() };
 }
 
 function parseFailures(files, transform) {
@@ -1586,9 +1625,9 @@ test("a mislabelled mutant direction is a hard error, not a fallback to ignore",
   assert.equal(assertDirection("ignore"), undefined);
 });
 
-test("the loader transform keeps every tracked file parseable", (t) => {
-  const files = trackedFiles();
-  assert.ok(files.length > 0, "the tracked corpus must not be empty");
+test("the loader transform keeps every file of the population parseable", (t) => {
+  const { population, files } = trackedFiles();
+  assert.ok(files.length > 0, "the corpus population must not be empty");
   const directory = mkdtempSync(join(tmpdir(), "relay-carrier-"));
   const synthetic = join(directory, "synthetic-multiline-import.mjs");
   writeFileSync(
@@ -1607,15 +1646,15 @@ test("the loader transform keeps every tracked file parseable", (t) => {
     assert.equal(
       robust.processed,
       files.length + 1,
-      "every tracked file must be processed, and an exception must never shrink the denominator",
+      "every file of the population must be processed, and an exception must never shrink the denominator",
     );
     assert.deepEqual(
       robust.broken,
       [],
-      `the carrier's loader transform corrupts ${robust.broken.length} tracked files`,
+      `the carrier's loader transform corrupts ${robust.broken.length} file(s) of the population`,
     );
     const naive = parseFailures([...files, synthetic], stripImportsNaive);
-    t.diagnostic(`tracked JS files: ${files.length}`);
+    t.diagnostic(`population: ${population}, ${files.length} JavaScript file(s)`);
     t.diagnostic(`files the naive per-line import strip corrupts: ${naive.broken.length}`);
     t.diagnostic(
       `the naive strip corrupts the synthetic multi-line import: ${naive.broken.some((entry) => entry.startsWith(synthetic))}`,
