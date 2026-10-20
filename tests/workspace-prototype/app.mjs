@@ -26,6 +26,18 @@ function button(text, handler) {
 function notice(text) {
   $("connection").textContent = text;
 }
+/**
+ * X6 renders through a job queue that is drained from requestAnimationFrame.
+ * A headless page that never produces a frame leaves the SVG stage empty even
+ * though the model holds the cells, so the topology never appears. Draining
+ * the render queue synchronously paints the cells into the DOM without a
+ * frame. The queue path is feature detected: if X6 moves it, the call is
+ * skipped and the normal frame driven render still applies.
+ */
+function flushGraphPaint(target) {
+  const queue = target?.renderer?.schedule?.queue;
+  if (typeof queue?.flushJobsSync === "function") queue.flushJobsSync();
+}
 async function action(input) {
   if (!connected) throw Error("Live feed disconnected. Reconnect before changing work.");
   const res = await fetch("/api/action", {
@@ -156,9 +168,11 @@ class TopologyPanel extends BasePanel {
     });
     this.observer.observe(this.host);
     this.updateState();
+    flushGraphPaint(this.graph);
   }
   fit() {
     this.graph?.zoomToFit({ padding: 45, maxScale: 1 });
+    flushGraphPaint(this.graph);
   }
   updateState() {
     if (!current || !this.graph) return;
@@ -192,12 +206,14 @@ class TopologyPanel extends BasePanel {
     }
     const pending = current.work.filter((w) => w.state === "pending").length;
     this.graph.getCellById("bounty").attr("label/text", `BOUNTY\n${pending} PENDING`);
+    flushGraphPaint(this.graph);
   }
   pulse(event) {
     const edge = this.graph.getCellById(`wire-${event.worker}`);
     if (!edge) return;
     const color = event.type === "ack" ? "#f4f4f4" : "#c4ff00";
     edge.attr("line/stroke", color);
+    flushGraphPaint(this.graph);
     const view = this.graph.findViewByCell(edge);
     const line = view?.container.querySelector("path:last-child");
     if (line) {
@@ -547,7 +563,10 @@ try {
   observer.observe($("workspace"));
   connectFeed();
   $("post").onclick = () => action({ action: "seed" }).catch((e) => notice(e.message));
-  $("fit").onclick = () => graph?.zoomToFit({ padding: 45, maxScale: 1 });
+  $("fit").onclick = () => {
+    graph?.zoomToFit({ padding: 45, maxScale: 1 });
+    flushGraphPaint(graph);
+  };
   const layoutKey = `relay-workspace-${current.instance}`;
   $("save").onclick = () => {
     try {
