@@ -9,9 +9,7 @@ export type MessageState = "pending" | "claimed" | "posted" | "done" | "failed" 
 export type AckOutcome = "done" | "failed" | "rejected";
 export type AgentState = "registered" | "starting" | "ready" | "busy" | "unknown" | "stale";
 
-export type Envelope =
-  | { msg: string; work?: never }
-  | { work: JsonValue; msg?: never };
+export type Envelope = { msg: string; work?: never } | { work: JsonValue; msg?: never };
 
 export interface PendingCounts {
   msg: number;
@@ -121,11 +119,35 @@ export interface ReleaseReceipt {
 }
 
 export type FaultCode =
-  | "input" | "data" | "missing" | "schema" | "active" | "session" | "expired"
-  | "target" | "device_conflict" | "board" | "key_conflict" | "ack_conflict"
-  | "owner" | "lease" | "full" | "busy" | "clock" | "storage" | "auth"
-  | "denied" | "protocol" | "tls" | "rpc_conflict" | "uncertain" | "cursor"
-  | "reset" | "rate" | "timeout" | "unavailable";
+  | "input"
+  | "data"
+  | "missing"
+  | "schema"
+  | "active"
+  | "session"
+  | "expired"
+  | "target"
+  | "device_conflict"
+  | "board"
+  | "key_conflict"
+  | "ack_conflict"
+  | "owner"
+  | "lease"
+  | "full"
+  | "busy"
+  | "clock"
+  | "storage"
+  | "auth"
+  | "denied"
+  | "protocol"
+  | "tls"
+  | "rpc_conflict"
+  | "uncertain"
+  | "cursor"
+  | "reset"
+  | "rate"
+  | "timeout"
+  | "unavailable";
 
 export interface FaultContext {
   id?: string;
@@ -427,8 +449,18 @@ export declare class Client {
   resume(sid: string): Promise<Session>;
   renew(sid: string): Promise<Session>;
   leave(sid: string): Promise<EndReceipt>;
-  send(sid: string, to: WorkerAddress, envelope: Envelope, options?: KeyOptions): Promise<AdmissionReceipt>;
-  post(sid: string, board: BoardId, envelope: Envelope, options?: PostOptions): Promise<AdmissionReceipt>;
+  send(
+    sid: string,
+    to: WorkerAddress,
+    envelope: Envelope,
+    options?: KeyOptions,
+  ): Promise<AdmissionReceipt>;
+  post(
+    sid: string,
+    board: BoardId,
+    envelope: Envelope,
+    options?: PostOptions,
+  ): Promise<AdmissionReceipt>;
   claim(sid: string, options?: ClaimOptions): Promise<Lease | null>;
   touch(sid: string, lease: string): Promise<Lease>;
   ack(sid: string, lease: string, outcome: AckOutcome): Promise<Receipt>;
