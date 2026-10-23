@@ -1,187 +1,107 @@
 # Relay
 
-Relay is a standalone Node.js package and CLI for addressed worker messages,
-board work, and a read-only topology view. It requires no Executor, MCP server,
-AI Intercom installation, account, or private home-directory configuration.
+Relay is a browser fleet console for **Agent Host Protocol (AHP) 1.0**. It is a
+client, not an agent daemon. The host is the sole authority for sessions,
+providers, transcripts, approvals, tasks, and execution. Relay **persists no**
+agent state or credentials and does not run a second scheduler.
 
-## Status
+## Run the console
 
-The store, CLI/SDK, authenticated broker, topology interface, and opt-in delivery
-supervisor are implemented. A first-party OpenCode plugin is implemented but
-not fully qualified. Idle notice delivery was observed on isolated OpenCode
-2.0.27, including direct loading from an installed archive. Other required
-native adapters and the remaining native cases are incomplete.
-Relay is not yet ready for the full native-agent release;
-see [delivery status](docs/delivery.md) and [verification](docs/verification.md).
-
-Replacing an existing Intercom deployment is not part of this release.
-
-## Install from source
+Requires Node.js 24+ for the build and local static server.
 
 ```sh
-git clone https://github.com/PugzUI/Relay.git
-cd Relay
 npm ci
-```
-
-Node.js `>=24.0.0` and a local filesystem are required. No runtime dependencies
-are declared. Installation starts no store, agent, or network listener.
-
-## CLI
-
-Local inspection and mutation use a selected store root. Read commands open it
-read-only and do not initialize a missing store.
-
-```sh
-node src/cli.mjs setup --root './relay data' --device workstation
-node src/cli.mjs register worker --root './relay data' --cap inspect
-node src/cli.mjs join workstation:worker:001 --root './relay data'
-printf '%s\n' '{"msg":"ready"}' | node src/cli.mjs send workstation:worker:001 --sid SESSION --root './relay data'
-```
-
-Replace `SESSION` with the session `id` returned by `join`. A send or board post reads
-one JSON envelope from stdin: `{ "msg": "text" }` or
-`{ "work": { "task": "inspect" } }`. Text is never classified as work.
-`--json` writes compact JSON; normal output escapes terminal control bytes.
-Bearer tokens are read from private files and are never command arguments or
-URL values.
-
-## API
-
-```js
-import { open } from "./src/index.mjs";
-
-const relay = open({ root: "./relay data" });
-try {
-  const worker = relay.register("worker");
-  const session = relay.join(worker.id);
-  const receipt = relay.send(session.id, worker.id, { msg: "ready" });
-  console.log(receipt.id, receipt.repeat);
-} finally {
-  relay.close();
-}
-```
-
-See [API reference](docs/api.md), [storage](docs/storage.md),
-[limits](docs/limits.md), [network](docs/network.md), [boards](docs/boards.md),
-and [topology](docs/topology.md).
-
-## Interface
-
-The broker serves one read-only topology page with selected-board
-`Inbox | Bounties` panes. It displays committed store state, not simulated
-agent activity. Browser connection does not establish native agent readiness.
-
-Start the local dashboard:
-
-```sh
+npm run check
 npm start
 ```
 
-On first launch, the CLI creates a private host profile under `.local/`, with
-real persisted storage, an HTTP listener bound to `0.0.0.0:4200`, and a
-read-only viewer credential. Requests are accepted only from loopback or a
-Tailscale IPv4 peer reaching the host's Tailscale address. It starts no agents
-and seeds no traffic. Existing generated loopback profiles upgrade on startup
-without changing their store or viewer credential; custom profiles are retained.
-The local URL, available Tailscale URL, and private token-file location are
-printed, never the token itself. Stop it with Ctrl+C.
+Open http://127.0.0.1:4200 and connect an AHP host. The console binds to
+loopback only. It can connect to any number of authorized AHP hosts.
 
-Open `http://<your-tailscale-ip>:4200/` from another device on your tailnet and
-paste the viewer token into **Bearer token**. Your tailnet ACLs must allow this
-device and port. Direct HTTP must stay within Tailscale's encrypted network;
-for a normal LAN or a public network, use the documented TLS profile instead.
+## Run the agent host
 
-On a Wayland desktop with `wl-copy` installed, startup also copies the viewer
-token to the clipboard: paste into **Bearer token** and click **Connect**.
-The token is sent through stdin, never command arguments or logs. If clipboard
-copy is unavailable, the dashboard still starts and reports the token-file path.
-Use `npm start -- --no-copy-token` to skip copying. JSON output and custom
-profiles never touch the clipboard; clipboard support is optional.
-
-For an existing operator-managed profile, supply both selectors:
+An AHP 1.0 server such as [ahpd](https://github.com/softov/ahpd) owns agent
+sessions independently of Relay. Configure it with the projects and approved
+agent backends, then run it under its built-in user systemd unit:
 
 ```sh
-npm start -- --root './relay data' --config './relay.json'
+npm install --global @ahpd/server@0.13.0
+ahpd configure
+ahpd plugin install @ahpd/agent-acp@0.13.0
+ahpd service install
+ahpd status
 ```
 
-`--` forwards options to the existing broker CLI. Custom profiles are not
-initialized or overwritten. See [network setup](docs/network.md) for their
-configuration and permissions. An installed package uses `relay serve` with
-the same local defaults, or `relay serve --root PATH --config FILE`.
+Configure the ACP plugin with only the agents you need. Each must have a
+working native ACP command and credentials. For example, OpenCode exposes
+`opencode acp`; Hermes exposes `hermes acp`.
 
-Open the configured origin and connect with its private bearer token. The token
-stays in browser memory and is not stored in a URL. The interface does not
-start agents, submit prompts, or acknowledge work.
+In Relay, enter the host endpoint (`ws://127.0.0.1:9187`) and its access
+token. Host discovery and sessions appear when the AHP handshake succeeds.
+For a remote host, use `wss://` with authenticated, encrypted transport.
+Host connections exist only in the current browser page; a full reload requires
+reconnecting, but sessions and work remain owned by the host.
 
-Topology filtering accepts text and scoped fields such as
-`type:worker state:busy cap:inspect`. Matching counts, contextual device rows,
-selected-link emphasis, and inspector link details use the authorized snapshot.
-Inbox and Bounties offer compact record metadata and an ID-only Copy control.
+**Security:** The AHP WebSocket browser transport conveys the host token as a
+`tkn` query parameter because browsers cannot set a WebSocket Authorization
+header. Relay code does not log or store tokens, but browser or host handshake
+diagnostics can expose the full `?tkn=` URL after a failed connection. In
+ahpd 0.13, a valid token admits WebSocket upgrades regardless of the request's
+Origin; configured HTTP Origin restrictions do not guard this socket. Protect
+DevTools and host/proxy logs, require tokens, bind the host to loopback or a
+private network such as Tailscale, use TLS (`wss://`) for remote browsers, and
+configure least-privilege host grants. AHP workspace paths are not an OS
+sandbox. Trust only explicitly approved project folders; do not disable ACP
+workspace-trust checks globally. Tool permissions remain owned by the agent host.
 
-## Delivery and authority
+## What Relay does
 
-Each store owns its records, board scope, and expiry clock. A hub owns the
-shared `bounty` board; each host owns its `host:<device-id>` board. A host may
-connect to one configured hub, but databases and queues are not replicated.
-The hub never opens a host database.
+- Shows live hosts, advertised agents, session activity, and workspace topology
+  directly from official AHP state.
+- Creates agent sessions, displays actual turns and tool activity, queues turns,
+  cancels active work, and responds to confirmations and input requests.
+- Uses host-resolved session configuration for isolation, branch/worktree settings
+  and permissions; offers host-advertised models and paginated turn history.
+- Shows host-advertised changesets and review options, with on-demand, bounded
+  text before/after previews where the host permits resource reads.
+- Reconnects to dropped hosts and refreshes the selected session from authoritative
+  snapshots. Disconnected session details are marked unavailable.
+- Does not cache transcripts or tokens, duplicate AHP state into SQLite, or
+  interpret idle heuristics as completed work.
 
-Accepted enqueue, claim, and acknowledgement state is persisted. A worker can
-repeat work after interruption or lease expiry, including after an external
-side effect occurred but before acknowledgement. Make external effects
-idempotent when duplication matters. A keyed send deduplicates admission during
-key retention; it does not provide exactly-once execution.
+Sessions survive Relay closing because they are owned by the AHP host. Host
+restarts and active-turn recovery depend on the chosen host/ACP agent and must
+be verified for each deployment. Some native ACP providers are re-enumerated
+under a new host session URI after a daemon restart; in that case, inspect the
+restored session in the host catalog instead of retrying the old URI.
 
-Relay’s durable queue does not itself invoke an agent session or wake an idle
-runtime. Optional native delivery is disabled by default and remains
-unqualified; see the
-[delivery contract and client inventory](docs/delivery.md).
-An explicit `consume: true` option enables the pinned OpenCode plugin's
-scoped recipient tools and runtime session/lease maintenance. Notice-only
-behavior remains the default. See [idle recipient consumption](docs/idle-consumer.md)
-for configuration and the remaining native qualification boundary.
+**Catalog scale:** The current AHP JavaScript multi-host client consumes only
+the first `listSessions` page, and `ahpd@0.13.0` limits that response to 1,000
+sessions per host. A host with more sessions may have additional results not
+shown in Relay until the SDK supports catalog pagination. Relay does not claim
+that a truncated host listing is complete.
 
-## Network and setup
+## ChatGPT / Executor
 
-Local setup starts no listener. `serve` is an explicit operation; its default
-application port is `4200`. Local HTTP binds literal loopback. LAN mode requires
-an explicit local address, TLS trust, and an exact peer allowlist. Tailscale
-mode uses loopback behind operator-managed private HTTPS. Credentials and
-Relay permissions remain required in every mode. See [network boundaries and
-qualification](docs/network.md).
-
-This repository has no LAN or private-network qualification evidence yet.
-No Relay setup operation changes firewall, Tailscale, certificate, proxy, or
-service configuration.
-
-## Development
+Use [ahpc](https://github.com/softov/ahpc) as Executor's MCP connection:
 
 ```sh
-npm run check
-npm test
+npm install --global @softov/ahpc@0.9.0
+ahpc --host ws://127.0.0.1:9187 \
+  --connection-token-file ~/.config/ahpd/connection-token \
+  mcp --mcp-tools automations,changes
 ```
 
-`check` validates syntax, declarations, package contents, and frozen module
-presence; it does not run tests. `test` is separate. Disposable verification
-fixtures are under `tests/` and are excluded from the package. Fixture success
-does not qualify native agent delivery. See
-[verification evidence and remaining boundaries](docs/verification.md).
+This connects ChatGPT to the exact same host sessions; Relay needs no
+Executor-specific backend, REST API, or GraphQL server.
 
-See [acceptance cases](docs/acceptance.md)
-and [the frozen contract](docs/contract.md) for implementation and qualification
-boundaries. Licensed under [MIT](LICENSE).
+## Scope
 
-### Design and development fixtures
+Relay 1.0 intentionally removes the original message broker, queue, Pool,
+delivery adapters, RPC journal, and second SQLite state engine. They were
+not authoritative for native coding-agent sessions. There is no compatibility
+mode or transitional daemon. The former agent-to-agent bounty service is not
+part of the fleet product.
 
-[DESIGN.md](DESIGN.md) describes the existing UI theme. `.editorconfig`,
-`biome.json`, and `ruff.toml` configure optional editor/developer tooling;
-they do not add runtime dependencies or replace the checks above. The lint
-rules are development guidance, not a claim that the full repository is
-lint-clean. Generated UI output and the vendored renderer are not lint targets.
-
-The [renderer comparison](tests/renderer-comparison/README.md) and
-[workspace prototype](tests/workspace-prototype/README.md) are isolated,
-optional verification fixtures, not production UI or native-agent delivery.
-The renderer retains its local bundle and license. The workspace prototype
-has its own locked dependencies and regenerates its ignored `assets/` directory.
-Both directories remain excluded from the published Relay package.
+The original visual design specification is preserved in [DESIGN.md](DESIGN.md).
+It governs the topology, square geometry, neutral palette and restrained motion.

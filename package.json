@@ -1,39 +1,26 @@
 {
   "name": "@pugzui/relay",
-  "version": "0.1.0",
-  "description": "Device-qualified relays, boards, and topology view",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24"
   },
-  "license": "MIT",
-  "bin": {
-    "relay": "./src/cli.mjs"
-  },
-  "exports": {
-    ".": {
-      "types": "./src/index.d.ts",
-      "import": "./src/index.mjs"
-    },
-    "./opencode-plugin": {
-      "import": "./src/adapters/index.mjs"
-    }
-  },
-  "files": [
-    "src/",
-    "ui/",
-    "LICENSE"
-  ],
   "scripts": {
-    "start": "node src/cli.mjs serve",
-    "build:ui": "node scripts/build-ui.mjs",
-    "prepack": "node scripts/build-ui.mjs --quiet",
-    "check": "node scripts/check.mjs",
-    "test": "node --test \"tests/*.test.mjs\""
+    "build": "node scripts/build.mjs",
+    "start": "node src/serve.mjs",
+    "check": "npm test",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@microsoft/agent-host-protocol": "1.0.0",
+    "lit": "3.3.3"
   },
   "devDependencies": {
+    "@agentclientprotocol/sdk": "1.9.0",
+    "@ahpd/agent-acp": "0.13.0",
+    "@ahpd/server": "0.13.0",
     "esbuild": "0.28.2",
-    "lit": "3.3.3",
-    "typescript": "5.9.3"
+    "playwright": "1.64.1"
   }
 }

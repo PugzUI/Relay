@@ -1,6 +1,0 @@
-ruleDirs:
-- .agents/sg/rules
-testConfigs:
-- testDir: .agents/sg/rule-tests
-utilDirs:
-- .agents/sg/utils

@@ -3,84 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'">
-    <title>Relay</title>
+    <meta name="theme-color" content="#000000">
+    <link rel="icon" href="data:,">
+    <title>Relay · Fleet</title>
     <link rel="stylesheet" href="/style.css">
-    <script type="module" src="/main.mjs"></script>
+    <script type="module" src="/app.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#topology-title">Skip to topology</a>
-    <header class="topbar">
-      <a class="wordmark" href="/" aria-label="Relay"><svg class="relay-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5h13v5H7v9h15M15 5h7M7 14h10"/></svg>Relay</a>
-      <nav class="section-nav" aria-label="Sections"><a href="#topology-title">Topology</a><a href="#boards-title">Boards</a></nav>
-      <form id="auth-form" class="auth-form" autocomplete="off">
-        <label for="token">Bearer token</label>
-        <input id="token" name="token" type="password" autocomplete="off" spellcheck="false" required>
-        <button type="submit">Connect</button>
-      </form>
-      <div id="connection" class="connection" role="status" aria-live="polite" data-state="disconnected">Disconnected</div>
-      <button id="disconnect" class="quiet-button" type="button" disabled>Disconnect</button>
-    </header>
-
-    <main>
-      <relay-overview id="overview" aria-label="Snapshot summary"></relay-overview>
-      <section class="topology-section" aria-labelledby="topology-title">
-        <div class="section-heading">
-          <h1 id="topology-title" tabindex="-1">Topology</h1>
-          <div id="snapshot-meta" class="meta" aria-live="polite"></div>
-        </div>
-        <div class="topology-toolbar">
-          <div id="topology-status" class="status-line" role="status">Disconnected</div>
-          <label class="filter-control" for="node-filter"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4"/><path d="m10 10 4 4"/></svg><span class="sr-only">Filter topology</span><input id="node-filter" type="search" placeholder="Filter nodes" maxlength="128" autocomplete="off" spellcheck="false" list="node-filter-options" aria-describedby="filter-help"><kbd>/</kbd></label>
-          <datalist id="node-filter-options"></datalist>
-          <span id="filter-help" class="sr-only">Combine search words with type:worker, type:device, type:board, state:busy, or cap:inspect. Suggestions come from the current topology.</span>
-          <span id="filter-summary" class="filter-summary" aria-live="polite"></span>
-          <button id="expand-all" class="quiet-button" type="button" disabled>Expand all</button>
-          <button id="refresh" class="quiet-button" type="button" disabled>Refresh</button>
-        </div>
-        <div class="topology-workspace">
-          <relay-topology id="topology" class="topology" aria-label="Relay topology"></relay-topology>
-          <aside class="inspector" aria-labelledby="inspector-title"><h2 id="inspector-title" class="topology-label">Inspector</h2><relay-inspector id="inspector"></relay-inspector></aside>
-        </div>
-        <div class="topology-footer"><span class="topology-legend"><span class="legend-line" aria-hidden="true"></span>Current link<span class="legend-line legend-selected" aria-hidden="true"></span>Selected link<span class="legend-line legend-pulse" aria-hidden="true"></span>Committed event</span><span>↑ ↓ navigate · ← → collapse / expand</span></div>
-      </section>
-
-      <section class="boards-section" aria-labelledby="boards-title">
-        <div class="section-heading">
-          <h2 id="boards-title">Boards</h2>
-          <label class="board-picker-label" for="board-picker">Selected board</label>
-          <select id="board-picker" disabled aria-label="Selected board"></select>
-        </div>
-        <div class="panes">
-          <section class="pane" aria-labelledby="inbox-title">
-            <div class="pane-heading">
-              <h3 id="inbox-title">Inbox</h3>
-              <span id="inbox-count" class="meta"></span>
-            </div>
-            <div id="inbox-status" class="status-line" role="status">Disconnected</div>
-            <ol id="inbox-rows" class="records terminal" aria-label="Inbox history"></ol>
-            <nav class="pager" aria-label="Inbox pages">
-              <button id="inbox-prev" type="button" disabled>Previous</button>
-              <span id="inbox-page" class="meta"></span>
-              <button id="inbox-next" type="button" disabled>Next</button>
-            </nav>
-          </section>
-          <section class="pane" aria-labelledby="bounties-title">
-            <div class="pane-heading">
-              <h3 id="bounties-title">Bounties</h3>
-              <span id="bounties-count" class="meta"></span>
-            </div>
-            <div id="bounties-status" class="status-line" role="status">Disconnected</div>
-            <ol id="bounties-rows" class="records" aria-label="Bounty work"></ol>
-            <nav class="pager" aria-label="Bounties pages">
-              <button id="bounties-prev" type="button" disabled>Previous</button>
-              <span id="bounties-page" class="meta"></span>
-              <button id="bounties-next" type="button" disabled>Next</button>
-            </nav>
-          </section>
-        </div>
-      </section>
-    </main>
+    <a class="skip" href="#main">Skip to fleet</a>
+    <relay-fleet></relay-fleet>
   </body>
 </html>
