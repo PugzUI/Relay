@@ -2,14 +2,14 @@ name: Relay
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     strategy:
       matrix:
-        node: ['24', '26']
+        node: ["24", "26"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
