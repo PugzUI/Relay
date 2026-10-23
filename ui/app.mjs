@@ -503,7 +503,8 @@ export class RelayFleet extends LitElement {
     const chat = this.fleet.chat;
     const selectableChats = (detail?.chats || []).filter((entry) =>
       entry.interactivity !== "hidden" || entry.resource === this.explicitChatUri);
-    const chatAllowsInput = !chat?.interactivity || chat.interactivity === "full";
+    const promptPolicy = this.fleet.chatPromptPolicy;
+    const chatAllowsInput = promptPolicy.allowsInput;
     const turns = chat?.turns || [];
     const historyEnd = Math.max(0, turns.length - this.historyOffset);
     const historyStart = Math.max(0, historyEnd - 40);
@@ -797,7 +798,7 @@ export class RelayFleet extends LitElement {
             ${chat?.queuedMessages?.length ? html`<div class="queue-notice">${chat.queuedMessages.length} queued turn(s)</div>` : nothing}
             ${this.fleet.waiting.size ? html`<div class="queue-notice warning">Awaiting host echo for ${this.fleet.waiting.size} submission(s)</div>` : nothing}
             ${chat && !chatAllowsInput ? html`<div class="chat-restriction" role="status">
-              This chat is ${chat.interactivity}. The host does not accept user prompts here.
+              ${promptPolicy.reason}
             </div>` : nothing}
             <form class="composer" @submit=${this.submitPrompt}>
               <label for="prompt">MESSAGE / QUEUED TURN</label>

@@ -128,6 +128,24 @@ test("queued model selection uses only models advertised by the correct host", (
   assert.equal(operations.length, 1);
 });
 
+test("chat prompt policy is the single authority for queue submission", () => {
+  const { fleet, operations } = fakeFleet();
+  assert.deepEqual(fleet.chatPromptPolicy, { allowsInput: true, reason: "" });
+  fleet.slots.chat.state.interactivity = "full";
+  assert.equal(fleet.chatPromptPolicy.allowsInput, true);
+  fleet.slots.chat.state.interactivity = "read-only";
+  const policy = fleet.chatPromptPolicy;
+  assert.equal(policy.allowsInput, false);
+  assert.match(policy.reason, /does not accept/);
+  assert.throws(() => fleet.queueTurn("Blocked by policy"), (error) =>
+    error.message === policy.reason);
+  assert.equal(operations.length, 0);
+  fleet.slots.chat.ready = false;
+  assert.equal(fleet.chatPromptPolicy.allowsInput, false);
+  assert.match(fleet.chatPromptPolicy.reason, /not ready/);
+  assert.throws(() => fleet.queueTurn("No chat"), /not ready/);
+});
+
 test("session config resolves directly through AHP without inventing defaults", async () => {
   const { fleet, operations } = fakeFleet();
   await fleet.resolveSessionConfig({ hostId: "a", provider: "fixture",

@@ -213,6 +213,18 @@ export class Fleet {
     return this.slots.chat?.ready ? this.slots.chat.state : null;
   }
 
+  get chatPromptPolicy() {
+    const chat = this.chat;
+    if (!chat) return { allowsInput: false, reason: "Chat is not ready" };
+    if (!chat.interactivity || chat.interactivity === "full") {
+      return { allowsInput: true, reason: "" };
+    }
+    return {
+      allowsInput: false,
+      reason: `This chat is ${chat.interactivity}. The host does not accept user prompts here.`,
+    };
+  }
+
   get changes() {
     return this.slots.changes?.ready ? this.slots.changes.state : null;
   }
@@ -569,9 +581,9 @@ export class Fleet {
   }
 
   queueTurn(text, modelId) {
-    if (!this.slots.chat?.ready || !this.slots.chat.state) throw Error("Chat is not ready");
-    if (this.chat.interactivity && this.chat.interactivity !== "full") {
-      throw Error("This chat does not accept user prompts");
+    const policy = this.chatPromptPolicy;
+    if (!policy.allowsInput) {
+      throw Error(policy.reason || "This chat does not accept user prompts");
     }
     if (!text.trim()) throw Error("A prompt is required");
     const provider = this.session?.provider;
