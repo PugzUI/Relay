@@ -9,7 +9,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "node src/serve.mjs",
-    "check": "npm test",
+    "check": "node scripts/check.mjs",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
