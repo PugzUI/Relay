@@ -63,7 +63,7 @@ Standards: [WCAG 2.2 Contrast (Minimum)](https://www.w3.org/WAI/WCAG22/Understan
 Two family definitions only:
 
 - `f-sans`: `"IBM Plex Sans", "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif`.
-- `f-mono`: `"IosevkaTerm NFM", "CommitMono Nerd Font", "IBM Plex Mono", "SF Mono", "Consolas", ui-monospace, monospace`.
+- `f-mono`: `"Geist Mono", "IosevkaTerm NFM", "CommitMono Nerd Font", "IBM Plex Mono", "SF Mono", "Consolas", ui-monospace, monospace`.
 - `f-legend` aliases `f-mono` for operational legends.
 
 Local font availability may select a fallback. A declared family is not proof that the preferred face is installed. No private font or private-use glyph is required to understand an icon.
@@ -111,7 +111,7 @@ Raw spacing steps `sp-2/4/6/8/10/12/16/20/24/32/40/48` have those pixel equivale
 - Panes: 20px default insets, 12px narrow; group gaps use 24/40/48px as the actual composition needs.
 - Metrics fill their grid tracks. Long identities and payloads wrap; records preserve payload line breaks and JSON indentation.
 
-The page has a 1600px maximum content width. The topology inspector is 256px wide, reducing to 208px at the 1100px breakpoint. At 760px and below, the topology and session catalog use one column, the inspector sits beneath, and toolbars wrap. Use `minmax(0, 1fr)` and `min-width: 0`; keep overflow local to regions that need it, not the page.
+The page has a 1600px maximum content width. The host sidebar contains its host count, a compact add-host action and the host list; global fleet metrics appear only once in the main panel. The host connection form does not show persistent credential instructions (its description remains accessible to assistive technology). The topology heading is kept free of duplicate counts, with the Keys action beside the search field. Inspector refresh/protocol controls appear only when a session is selected. The topology inspector is 256px wide, reducing to 208px at the 1100px breakpoint. At 760px and below, the topology and session catalog use one column, the inspector sits beneath, and toolbars wrap. Use `minmax(0, 1fr)` and `min-width: 0`; keep overflow local to regions that need it, not the page.
 
 ## State, motion and verification
 

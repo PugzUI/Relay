@@ -22,7 +22,7 @@
   --c-input: var(--c-muted-base);
   --c-focus: var(--c-accent);
   --f-sans: "IBM Plex Sans", "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
-  --f-mono: "IosevkaTerm NFM", "CommitMono Nerd Font", "IBM Plex Mono", "SF Mono", Consolas, ui-monospace, monospace;
+  --f-mono: "Geist Mono", "IosevkaTerm NFM", "CommitMono Nerd Font", "IBM Plex Mono", "SF Mono", Consolas, ui-monospace, monospace;
   --fs-xs: .75rem;
   --fs-sm: .875rem;
   --fs-md: 1rem;
@@ -87,6 +87,8 @@ relay-fleet { display: block; min-width: 0; }
 .workspace { display: grid; grid-template-columns: 14.375rem minmax(0, 1fr) 16rem; max-width: 100rem; min-height: calc(100dvh - 7rem); margin: auto; border-inline: 1px solid var(--c-bd); }
 .sidebar { min-width: 0; background: var(--c-bg-alt); border-right: 1px solid var(--c-sep); }
 .rail-title { display: flex; justify-content: space-between; gap: .5rem; padding: 1.1rem 1rem .65rem; color: var(--c-muted); font: 600 var(--fs-xs)/1.35 var(--f-mono); letter-spacing: .08em; }
+.rail-add-host { display: block; width: 100%; min-width: 0; padding: .4rem 1rem .75rem; border: 0; background: transparent; color: var(--c-accent); font: 500 var(--fs-xs)/1.35 var(--f-mono); text-align: right; }
+.rail-add-host:not(:disabled):hover { background: var(--c-hover); border-color: transparent; }
 .border-top { border-top: 1px solid var(--c-sep); margin-top: 1rem; }
 .hosts-list { min-width: 0; }
 .host-row { display: flex; align-items: center; gap: .65rem; width: 100%; min-width: 0; min-height: 3.5rem; padding: .7rem 1rem; text-align: left; border: none; border-left: 3px solid transparent; background: transparent; }
@@ -95,9 +97,6 @@ relay-fleet { display: block; min-width: 0; }
 .host-text { min-width: 0; flex: 1; }
 .host-text strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .host-text small { display: block; color: var(--c-muted); font: var(--fs-xs)/1.45 var(--f-mono); text-transform: capitalize; }
-.rail-data { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .45rem 1rem; color: var(--c-muted); font: var(--fs-xs)/1.5 var(--f-mono); }
-.rail-data b { color: var(--c-fg); font-weight: 500; font-variant-numeric: tabular-nums; }
-.rail-data b.warning { color: var(--c-warning); }
 .rail-info { padding: .35rem 1rem; overflow-wrap: anywhere; }
 .rail-info small { display: block; margin-top: .2rem; color: var(--c-muted); font: var(--fs-xs)/1.5 var(--f-mono); }
 .rail-info .host-error { color: var(--c-fg); border-left: 2px solid var(--c-danger); padding-left: .5rem; }
@@ -107,7 +106,6 @@ relay-fleet { display: block; min-width: 0; }
 .section-label { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .4rem 1rem; margin: 0 0 .8rem; color: var(--c-fg); font: 600 var(--fs-xs)/1.35 var(--f-mono); letter-spacing: .07em; }
 .section-label span { font-weight: 400; color: var(--c-muted); letter-spacing: 0; }
 .form-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.7fr) minmax(0, 1fr) auto; gap: .75rem; align-items: end; }
-.connect-help { margin: .6rem 0 0; color: var(--c-muted); font: var(--fs-xs)/1.45 var(--f-mono); overflow-wrap: anywhere; }
 .create-form { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 1.3fr) auto; align-items: end; gap: .75rem; }
 .workspace-trust { grid-column: 1/-1; display: flex; align-items: flex-start; gap: .65rem; max-width: 46rem; cursor: pointer; }
 .workspace-trust input { width: 1rem; height: 1rem; min-height: 1rem; margin-top: .2rem; accent-color: var(--c-accent); flex: none; }
@@ -137,14 +135,12 @@ relay-fleet { display: block; min-width: 0; }
 .section-head { display: flex; justify-content: space-between; align-items: end; gap: .75rem; padding-left: .85rem; border-left: 3px solid var(--c-accent); margin-bottom: 1rem; }
 .section-head h1, .section-head h2 { margin: .4rem 0 0; font-size: var(--fs-title); line-height: 1.2; font-weight: 600; letter-spacing: -.035em; }
 .eyebrow { display: block; color: var(--c-accent); font: 600 var(--fs-xs)/1.35 var(--f-mono); letter-spacing: .09em; }
-.section-meta { display: flex; align-items: center; justify-content: end; flex-wrap: wrap; gap: .65rem; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; text-align: right; }
-.section-meta kbd { margin-left: .3rem; }
 kbd { display: inline-block; min-width: 1.5rem; padding: .2rem .3rem; text-align: center; border: 1px solid var(--c-muted-base); color: var(--c-secondary); background: var(--c-bg-alt); font: 500 var(--fs-xs)/1.25 var(--f-mono); }
 .topology-panel { margin-bottom: 2rem; }
 .topology-tools { display: flex; align-items: end; flex-wrap: wrap; gap: .5rem .7rem; margin-bottom: .8rem; }
 .topology-tools label { flex: 0 0 auto; font: 600 var(--fs-xs)/1.35 var(--f-mono); letter-spacing: .06em; }
 .topology-tools input { flex: 1 1 15rem; max-width: 30rem; }
-.search-hint { color: var(--c-muted); font: var(--fs-xs)/1.4 var(--f-mono); }
+.topology-keys { margin-left: auto; }
 .legend { display: flex; flex-wrap: wrap; gap: .45rem 1rem; margin-bottom: .65rem; color: var(--c-secondary); font: var(--fs-xs)/1.5 var(--f-mono); }
 .legend i { display: inline-block; width: .6rem; height: .6rem; margin-right: .35rem; vertical-align: -1px; border: 1px solid var(--c-muted); }
 .legend i.lime { background: var(--c-accent); border-color: var(--c-accent); }
@@ -307,7 +303,7 @@ kbd { display: inline-block; min-width: 1.5rem; padding: .2rem .3rem; text-align
   .hosts-list { display: flex; overflow-x: auto; scrollbar-color: var(--c-sep) var(--c-bg-alt); }
   .host-row { flex: 0 0 10.5rem; border-left: 0; border-bottom: 3px solid transparent; }
   .host-row.selected { border-bottom-color: var(--c-accent); }
-  .sidebar .rail-title.border-top, .rail-data { display: none; }
+  .sidebar .rail-title.border-top { display: none; }
   .rail-info { padding-top: .6rem; }
   .rail-actions { padding-top: .3rem; }
   .center { padding: 1rem .75rem 2rem; }
@@ -331,8 +327,7 @@ kbd { display: inline-block; min-width: 1.5rem; padding: .2rem .3rem; text-align
   .metrics span { margin-top: .2rem; font-size: .7rem; line-height: 1.25; overflow-wrap: anywhere; }
   .section-head { flex-wrap: wrap; }
   .topology-tools label { flex-basis: 100%; }
-  .topology-tools input { max-width: none; }
-  .search-hint { display: none; }
+  .topology-tools input { flex-basis: 10rem; max-width: none; }
   .shortcuts-grid div { grid-template-columns: 1fr; gap: .25rem; }
 }
 @media (max-width: 359px) {

@@ -129,6 +129,13 @@ export class RelayFleet extends LitElement {
     if (dialog && !dialog.open) dialog.showModal();
   }
 
+  openConnectForm() {
+    this.connectOpen = true;
+    this.requestUpdate();
+    void this.updateComplete.then(() =>
+      this.querySelector('#connect-panel input[name="label"]')?.focus());
+  }
+
   activateNode(node) {
     if (node.kind === "session") this.openSession(node.hostId, node.uri);
     else this.selectHost(node.hostId);
@@ -548,6 +555,7 @@ export class RelayFleet extends LitElement {
       <main id="main" class="workspace">
         <aside class="sidebar" aria-label="Fleet hosts">
           <div class="rail-title"><span>HOSTS</span><span>${hosts.length}</span></div>
+          <button type="button" class="rail-add-host" @click=${() => this.openConnectForm()}>+ Add host</button>
           <div class="hosts-list">${hosts.map((host) => html`
             <button class="host-row ${activeHost?.id === host.id ? "selected" : ""}" @click=${() => this.selectHost(host.id)}
               aria-pressed=${activeHost?.id === host.id}>
@@ -556,12 +564,6 @@ export class RelayFleet extends LitElement {
               <span class="subtle">${host.sessionSummaries.length}</span>
             </button>
           `)}</div>
-          ${hosts.length === 0 ? html`<p class="muted pad">No connected hosts. Add an AHP endpoint.</p>` : nothing}
-          <div class="rail-title border-top"><span>FLEET SUMMARY</span></div>
-          <div class="rail-data"><span>Sessions</span><b>${sessions.length}</b></div>
-          <div class="rail-data"><span>In progress</span><b>${working}</b></div>
-          <div class="rail-data"><span>Needs input</span><b class="${attention ? "warning" : ""}">${attention}</b></div>
-          <div class="rail-data"><span>Advertised agents</span><b>${this.fleet.agents().length}</b></div>
           ${activeHost ? html`
             <div class="rail-title border-top"><span>ACTIVE HOST</span></div>
             <div class="rail-info">${activeHost.label}<small>${activeHost.protocolVersion ? "AHP " + activeHost.protocolVersion : "Protocol pending"}</small>
@@ -589,7 +591,7 @@ export class RelayFleet extends LitElement {
                   aria-describedby="host-token-help" autocomplete="off"></label>
                 <button class="primary" type="submit" ?disabled=${this.busy}>Connect</button>
               </div>
-              <p class="connect-help" id="host-token-help">Read from the host's ~/.config/ahpd/connection-token file. Never share this token.</p>
+              <p class="sr-only" id="host-token-help">Read the required access token from the host's ~/.config/ahpd/connection-token file. Never share this token.</p>
             </form>
           ` : nothing}
           ${this.fleet.error ? html`<div class="alert" role="alert"><span>ERROR</span> ${this.fleet.error}<button aria-label="Dismiss error" class="close" @click=${() => { this.fleet.error = ""; this.requestUpdate(); }}>×</button></div>` : nothing}
@@ -603,16 +605,14 @@ export class RelayFleet extends LitElement {
           <section class="topology-panel" aria-labelledby="topology-title">
             <div class="section-head">
               <div><span class="eyebrow">01 / OPERATIONS</span><h1 id="topology-title">Topology</h1></div>
-              <div class="section-meta"><span class="muted mono">${graph.shown} / ${graph.total} sessions shown</span>
-                <button class="quiet small" @click=${() => this.openShortcuts()} aria-keyshortcuts="?">Keys <kbd>?</kbd></button></div>
             </div>
             <div class="topology-tools">
               <label for="session-search">SEARCH FLEET</label>
               <input id="session-search" type="search" placeholder="Host, agent, session, workspace" aria-keyshortcuts="/" .value=${this.filterText}
                 @input=${(e) => { this.filterText = e.target.value; this.catalogLimit = 100; this.requestUpdate(); }}
                 @keydown=${(e) => { if (e.key === "Escape" && this.filterText) { e.preventDefault(); this.filterText = ""; e.currentTarget.value = ""; this.requestUpdate(); } }}>
-              ${this.filterText ? html`<button class="quiet small" @click=${() => { this.filterText = ""; this.requestUpdate(); this.querySelector("#session-search")?.focus(); }}>Clear</button>`
-                : html`<span class="search-hint">/ to focus</span>`}
+              ${this.filterText ? html`<button class="quiet small" @click=${() => { this.filterText = ""; this.requestUpdate(); this.querySelector("#session-search")?.focus(); }}>Clear</button>` : nothing}
+              <button class="quiet small topology-keys" @click=${() => this.openShortcuts()} aria-keyshortcuts="?">Keys <kbd>?</kbd></button>
             </div>
             <div class="legend" aria-label="Topology legend"><span><i class="legend-dot lime"></i> Selected / working</span><span><i class="legend-dot"></i> Connected</span><span><i class="legend-dot gold"></i> Needs input</span><span><i class="legend-dot stale"></i> Disconnected link</span></div>
             <p class="sr-only" id="map-instructions">Use Tab to enter the topology, arrow keys to move between nodes, Enter or Space to select, Escape to clear selection. The session catalog below offers the same sessions as a list.</p>
@@ -639,7 +639,7 @@ export class RelayFleet extends LitElement {
                     </g>`)}
                 </svg>
               ` : html`<div class="empty-map">${hosts.length ? "No nodes match this filter." : "No AHP hosts connected."}
-                <span>${hosts.length ? "Adjust the search to inspect hosts and sessions." : "Connect a host to render its actual agent topology."}</span></div>`}
+                ${hosts.length ? html`<span>Adjust the search to inspect hosts and sessions.</span>` : nothing}</div>`}
             </div>
             <p class="mobile-hint">Pan horizontally to inspect agents and sessions.</p>
             ${graph.total > graph.shown ? html`<p class="map-note">Topology displays the first ${graph.shown} of ${graph.total} matching sessions. Refine the search to locate a specific session.</p>` : nothing}
@@ -692,11 +692,11 @@ export class RelayFleet extends LitElement {
         </section>
 
         <aside class="inspector" aria-label="Session inspector">
-          <div class="inspector-head"><span>INSPECTOR</span><div class="inspector-head-actions">
+          <div class="inspector-head"><span>INSPECTOR</span>${selected ? html`<div class="inspector-head-actions">
             <span class="mono">AHP / 1.0</span>
             <button class="quiet small" @click=${() => this.refreshSelected()}
-              ?disabled=${!selected || !live || this.busy} aria-label="Refresh selected session from host">Refresh</button>
-          </div></div>
+              ?disabled=${!live || this.busy} aria-label="Refresh selected session from host">Refresh</button>
+          </div>` : nothing}</div>
           ${selected ? html`
             <div class="inspector-title">
               <button class="inspector-clear quiet small" aria-label="Clear session selection"

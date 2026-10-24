@@ -58,15 +58,49 @@ test("browser runs ACP turns, approvals, cancel, two hosts and restart boundarie
 
     try {
       await page.goto(webOrigin);
+      assert.equal(await page.locator(".sidebar .rail-data").count(), 0,
+        "Sidebar must not duplicate the four authoritative main metrics");
+      assert.equal(await page.locator(".metrics > div").count(), 4);
+      assert.equal(await page.locator(".sidebar").getByText("FLEET SUMMARY").count(), 0);
+      assert.equal(await page.locator(".sidebar").getByText("No connected hosts. Add an AHP endpoint.").count(), 0);
+      assert.equal(await page.locator(".topology-tools .topology-keys").count(), 1,
+        "Keys belongs beside the search field, not the section title");
+      assert.equal(await page.locator(".section-head .topology-keys").count(), 0);
+      assert.equal(await page.locator(".inspector-head button").count(), 0,
+        "An empty inspector must not display disabled session-only actions");
+      assert.equal(await page.locator(".empty-map span").count(), 0,
+        "The empty topology already explains itself without a second instruction");
+      const mono = await page.locator(".rail-title").evaluate((node) =>
+        getComputedStyle(node).fontFamily);
+      assert.match(mono, /^"Geist Mono"/);
+      await page.locator(".topology-keys").click();
+      assert.equal(await page.locator(".shortcuts-dialog").evaluate((dialog) => dialog.open), true);
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator(".shortcuts-dialog").evaluate((dialog) => dialog.open), false);
+      // Both entry points must operate on the same real connection form.
+      await page.getByRole("button", { name: "+ Connect host" }).click();
+      assert.equal(await page.locator(".connect-form").count(), 0);
+      await page.getByRole("button", { name: "+ Add host" }).click();
+      await page.locator(".connect-form").waitFor({ state: "visible" });
+      assert.equal(await page.locator('input[name="label"]').evaluate((input) =>
+        document.activeElement === input), true);
       await connect("Alpha", hosts[0]);
       await connect("Beta", hosts[1]);
       await page.waitForFunction(() =>
         document.querySelectorAll(".host-row small").length === 2 &&
         [...document.querySelectorAll(".host-row small")]
           .every((node) => node.textContent === "connected"));
+      await page.getByRole("button", { name: "+ Add host" }).click();
+      assert.equal(await page.locator('input[name="label"]').evaluate((input) =>
+        document.activeElement === input), true);
+      assert.equal(await page.locator(".host-row").count(), 2,
+        "Opening the connection form must not disrupt existing hosts");
+      await page.getByRole("button", { name: "+ Connect host" }).click();
 
       await createSession("Alpha", hosts[0]);
       await createSession("Beta", hosts[1]);
+      assert.equal(await page.locator(".inspector-head button").count(), 1,
+        "Session refresh must remain available with a selected session");
       await page.waitForFunction(() =>
         document.querySelectorAll(".session-row").length === 2 &&
         document.querySelectorAll("svg.map .node.host").length === 2 &&
@@ -162,6 +196,13 @@ test("browser runs ACP turns, approvals, cancel, two hosts and restart boundarie
       }));
       assert.ok(mobile.document <= mobile.viewport + 1,
         `Mobile layout overflows the viewport: ${JSON.stringify(mobile)}`);
+      const addHostMobile = await page.getByRole("button", { name: "+ Add host" })
+        .evaluate((button) => ({ minHeight: button.getBoundingClientRect().height,
+          right: button.getBoundingClientRect().right,
+          viewport: window.innerWidth }));
+      assert.ok(addHostMobile.minHeight >= 44 &&
+        addHostMobile.right <= addHostMobile.viewport + 1,
+      `The mobile Add host action is clipped or too small: ${JSON.stringify(addHostMobile)}`);
       assert.equal(await page.locator("svg.map .node.host").count(), 2);
 
       await page.setViewportSize({ width: 1440, height: 900 });
@@ -224,8 +265,8 @@ test("missing or invalid token can be repaired with the same host name", { timeo
     assert.equal((await page.locator(".host-row small").innerText()).toLowerCase(), "connected");
     assert.equal(await page.locator(".host-row").count(), 1);
 
-    // Regression: the token's explanatory text must never raise its input
-    // above Connect, nor push the button past the form edge at 1101px.
+    // The token's instructions remain available to assistive technology, but
+    // do not shift the input or button or add visual clutter at any viewport.
     for (const width of [1440, 1280, 1161, 1160, 1101, 1100, 900, 760, 540, 390, 360]) {
       await page.setViewportSize({ width, height: 900 });
       const positions = await page.evaluate(() => {
@@ -233,11 +274,12 @@ test("missing or invalid token can be repaired with the same host name", { timeo
         const form = rect(".connect-form");
         const token = rect('.connect-form input[name="token"]');
         const button = rect('.connect-form button[type="submit"]');
-        const help = rect(".connect-help");
+        const help = document.querySelector("#host-token-help");
         return {
           rightInset: form.right - button.right,
           aligned: Math.abs(token.bottom - button.bottom) <= 1,
-          helpBelowControls: help.top >= Math.max(token.bottom, button.bottom),
+          helpVisuallyHidden: getComputedStyle(help).position === "absolute" &&
+            help.getBoundingClientRect().width <= 1,
           hintAssociation: document.querySelector('.connect-form input[name="token"]')
             .getAttribute("aria-describedby") === "host-token-help",
         };
@@ -248,8 +290,8 @@ test("missing or invalid token can be repaired with the same host name", { timeo
         assert.ok(positions.aligned,
           `Token help shifts the field away from Connect at ${width}px`);
       }
-      assert.ok(positions.helpBelowControls && positions.hintAssociation,
-        `Token hint overlaps controls or loses its label at ${width}px`);
+      assert.ok(positions.helpVisuallyHidden && positions.hintAssociation,
+        `Token hint is visually distracting or loses accessible labeling at ${width}px`);
     }
   } finally {
     await browser.close();
