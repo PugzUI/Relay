@@ -254,8 +254,10 @@ export class Fleet {
     const id = label.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
     if (!id) throw Error("Host name is required");
     if (this.multi.host(id)) throw Error("Host name is already in use");
+    const credential = String(token || "").trim();
+    if (!credential) throw Error("An AHP host access token is required");
     // The secret lives exclusively in this closure and is never persisted or rendered.
-    if (token) url.searchParams.set("tkn", token);
+    url.searchParams.set("tkn", credential);
     await this.multi.addHost({
       id,
       label: label.trim(),

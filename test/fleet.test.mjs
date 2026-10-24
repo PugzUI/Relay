@@ -23,6 +23,21 @@ test("remote plaintext and credentialed URL entry are refused", () => {
   ]) assert.throws(() => safeEndpoint(value));
 });
 
+test("a missing AHP token cannot create an endlessly reconnecting host", async () => {
+  let added = 0;
+  const multi = {
+    host: () => null,
+    addHost: async () => { added++; },
+    events: async function* () {},
+    hostEvents: async function* () {},
+  };
+  const fleet = new Fleet(() => {}, multi);
+  await assert.rejects(fleet.addHost({
+    label: "v-arch", endpoint: "ws://127.0.0.1:9187", token: "  ",
+  }), /access token is required/);
+  assert.equal(added, 0);
+});
+
 test("workspace identifiers are absolute file URIs, not host-relative paths", () => {
   assert.equal(workspaceUri(""), undefined);
   assert.equal(workspaceUri("file:///home/user/workspace/Relay"), "file:///home/user/workspace/Relay");

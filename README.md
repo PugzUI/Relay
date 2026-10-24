@@ -56,6 +56,12 @@ against `@ahpd/agent-acp@0.13.0` using a free OpenCode model.
 
 In Relay, enter the host endpoint (`ws://127.0.0.1:9187`) and its access
 token. Host discovery and sessions appear when the AHP handshake succeeds.
+The token is required: read it locally from
+`~/.config/ahpd/connection-token` on the host and paste it into Relay's
+**Access token** field. A missing or incorrect token makes the WebSocket
+handshake fail even when both services are running. Use **Fix connection**
+to remove an unsuccessful connection and retry with the correct credentials;
+simply clicking Reconnect cannot correct an invalid token.
 For a remote host, use `wss://` with authenticated, encrypted transport.
 Host connections exist only in the current browser page; a full reload requires
 reconnecting, but sessions and work remain owned by the host.

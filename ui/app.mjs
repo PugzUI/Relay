@@ -565,10 +565,14 @@ export class RelayFleet extends LitElement {
           ${activeHost ? html`
             <div class="rail-title border-top"><span>ACTIVE HOST</span></div>
             <div class="rail-info">${activeHost.label}<small>${activeHost.protocolVersion ? "AHP " + activeHost.protocolVersion : "Protocol pending"}</small>
-              ${activeHost.lastError ? html`<small class="host-error">${activeHost.lastError.message}</small>` : nothing}
+              ${activeHost.lastError ? html`<small class="host-error">${activeHost.lastError.message === "websocket failed to open"
+                ? "WebSocket handshake failed. Check the host URL and access token."
+                : activeHost.lastError.message}</small>` : nothing}
             </div>
             <div class="rail-actions">
-              <button class="quiet small" @click=${() => this.run(() => this.fleet.reconnect(activeHost.id))} ?disabled=${this.busy}>Reconnect</button>
+              ${activeHost.state.status === "connected"
+                ? html`<button class="quiet small" @click=${() => this.run(() => this.fleet.reconnect(activeHost.id))} ?disabled=${this.busy}>Reconnect</button>`
+                : html`<button class="quiet small" @click=${() => { this.connectOpen = true; this.removeActiveHost(activeHost.id); }} ?disabled=${this.busy}>Fix connection</button>`}
               <button class="quiet small" @click=${() => this.removeActiveHost(activeHost.id)} ?disabled=${this.busy}>Remove</button>
             </div>
           ` : nothing}
@@ -581,7 +585,9 @@ export class RelayFleet extends LitElement {
               <div class="form-grid">
                 <label>Host label<input name="label" required placeholder="v-arch" autocomplete="off" spellcheck="false"></label>
                 <label>AHP WebSocket<input name="endpoint" required type="url" placeholder="ws://127.0.0.1:9187" autocomplete="off" spellcheck="false"></label>
-                <label>Access token<input name="token" type="password" placeholder="Host token" autocomplete="off"></label>
+                <label>Access token<input name="token" type="password" required placeholder="Required" autocomplete="off">
+                  <small>Read from the host's ~/.config/ahpd/connection-token file. Never share this token.</small>
+                </label>
                 <button class="primary" type="submit" ?disabled=${this.busy}>Connect</button>
               </div>
             </form>

@@ -182,3 +182,35 @@ test("browser runs ACP turns, approvals, cancel, two hosts and restart boundarie
       await browser.close();
     }
   });
+
+test("missing or invalid token has an actionable recovery path", { timeout: 45000 }, async (t) => {
+  const { hosts, webOrigin } = await isolatedFleet(t, { withWeb: true });
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage({ viewport: { width: 960, height: 720 } });
+    await page.goto(webOrigin);
+    await page.locator('input[name="label"]').fill("v-arch");
+    await page.locator('input[name="endpoint"]').fill(hosts[0].origin);
+    await page.locator('.connect-form button[type="submit"]').click();
+    assert.equal(await page.locator('input[name="token"]').evaluate((input) =>
+      input.validity.valueMissing), true);
+    assert.equal(await page.locator(".host-row").count(), 0);
+
+    await page.locator('input[name="token"]').fill("invalid-token");
+    await page.locator('.connect-form button[type="submit"]').click();
+    await page.waitForFunction(() =>
+      document.querySelector(".host-error")?.textContent?.includes("Check the host URL and access token"),
+    null, { timeout: 15000 });
+    await page.getByRole("button", { name: "Fix connection" }).click();
+    await page.locator(".host-row").waitFor({ state: "detached" });
+    await page.locator('input[name="label"]').fill("v-arch");
+    await page.locator('input[name="endpoint"]').fill(hosts[0].origin);
+    await page.locator('input[name="token"]').fill(hosts[0].token);
+    await page.locator('.connect-form button[type="submit"]').click();
+    await page.waitForFunction(() =>
+      document.querySelector(".host-row small")?.textContent === "connected", null, { timeout: 15000 });
+    assert.equal(await page.locator(".host-error").count(), 0);
+  } finally {
+    await browser.close();
+  }
+});
