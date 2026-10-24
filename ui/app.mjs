@@ -585,11 +585,11 @@ export class RelayFleet extends LitElement {
               <div class="form-grid">
                 <label>Host label<input name="label" required placeholder="v-arch" autocomplete="off" spellcheck="false"></label>
                 <label>AHP WebSocket<input name="endpoint" required type="url" placeholder="ws://127.0.0.1:9187" autocomplete="off" spellcheck="false"></label>
-                <label>Access token<input name="token" type="password" required placeholder="Required" autocomplete="off">
-                  <small>Read from the host's ~/.config/ahpd/connection-token file. Never share this token.</small>
-                </label>
+                <label>Access token<input name="token" type="password" required placeholder="Required"
+                  aria-describedby="host-token-help" autocomplete="off"></label>
                 <button class="primary" type="submit" ?disabled=${this.busy}>Connect</button>
               </div>
+              <p class="connect-help" id="host-token-help">Read from the host's ~/.config/ahpd/connection-token file. Never share this token.</p>
             </form>
           ` : nothing}
           ${this.fleet.error ? html`<div class="alert" role="alert"><span>ERROR</span> ${this.fleet.error}<button aria-label="Dismiss error" class="close" @click=${() => { this.fleet.error = ""; this.requestUpdate(); }}>×</button></div>` : nothing}

@@ -223,6 +223,34 @@ test("missing or invalid token can be repaired with the same host name", { timeo
       { timeout: 10000 });
     assert.equal((await page.locator(".host-row small").innerText()).toLowerCase(), "connected");
     assert.equal(await page.locator(".host-row").count(), 1);
+
+    // Regression: the token's explanatory text must never raise its input
+    // above Connect, nor push the button past the form edge at 1101px.
+    for (const width of [1440, 1280, 1161, 1160, 1101, 1100, 900, 760, 540, 390, 360]) {
+      await page.setViewportSize({ width, height: 900 });
+      const positions = await page.evaluate(() => {
+        const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+        const form = rect(".connect-form");
+        const token = rect('.connect-form input[name="token"]');
+        const button = rect('.connect-form button[type="submit"]');
+        const help = rect(".connect-help");
+        return {
+          rightInset: form.right - button.right,
+          aligned: Math.abs(token.bottom - button.bottom) <= 1,
+          helpBelowControls: help.top >= Math.max(token.bottom, button.bottom),
+          hintAssociation: document.querySelector('.connect-form input[name="token"]')
+            .getAttribute("aria-describedby") === "host-token-help",
+        };
+      });
+      assert.ok(positions.rightInset >= 12,
+        `Connect button clips the form edge at ${width}px: ${JSON.stringify(positions)}`);
+      if (width > 760) {
+        assert.ok(positions.aligned,
+          `Token help shifts the field away from Connect at ${width}px`);
+      }
+      assert.ok(positions.helpBelowControls && positions.hintAssociation,
+        `Token hint overlaps controls or loses its label at ${width}px`);
+    }
   } finally {
     await browser.close();
   }
