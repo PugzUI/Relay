@@ -183,7 +183,7 @@ test("browser runs ACP turns, approvals, cancel, two hosts and restart boundarie
     }
   });
 
-test("missing or invalid token has an actionable recovery path", { timeout: 45000 }, async (t) => {
+test("missing or invalid token can be repaired with the same host name", { timeout: 45000 }, async (t) => {
   const { hosts, webOrigin } = await isolatedFleet(t, { withWeb: true });
   const browser = await launchBrowser();
   try {
@@ -201,8 +201,9 @@ test("missing or invalid token has an actionable recovery path", { timeout: 4500
     await page.waitForFunction(() =>
       document.querySelector(".host-error")?.textContent?.includes("Check the host URL and access token"),
     null, { timeout: 15000 });
-    await page.getByRole("button", { name: "Fix connection" }).click();
-    await page.locator(".host-row").waitFor({ state: "detached" });
+    // Retry from the Connect form without deleting the failed v-arch entry.
+    // The previous behavior raised "Host name is already in use".
+    await page.getByRole("button", { name: "+ Connect host" }).click();
     await page.locator('input[name="label"]').fill("v-arch");
     await page.locator('input[name="endpoint"]').fill(hosts[0].origin);
     await page.locator('input[name="token"]').fill(hosts[0].token);
@@ -210,6 +211,18 @@ test("missing or invalid token has an actionable recovery path", { timeout: 4500
     await page.waitForFunction(() =>
       document.querySelector(".host-row small")?.textContent === "connected", null, { timeout: 15000 });
     assert.equal(await page.locator(".host-error").count(), 0);
+    assert.equal(await page.locator(".host-row").count(), 1, "Retry must not duplicate the host");
+    // Re-submitting that name once connected must not interrupt its sessions.
+    await page.getByRole("button", { name: "+ Connect host" }).click();
+    await page.locator('input[name="label"]').fill("v-arch");
+    await page.locator('input[name="endpoint"]').fill(hosts[0].origin);
+    await page.locator('input[name="token"]').fill(hosts[0].token);
+    await page.locator('.connect-form button[type="submit"]').click();
+    await page.waitForFunction(() =>
+      document.querySelector(".alert")?.textContent?.includes("already connected"), null,
+      { timeout: 10000 });
+    assert.equal((await page.locator(".host-row small").innerText()).toLowerCase(), "connected");
+    assert.equal(await page.locator(".host-row").count(), 1);
   } finally {
     await browser.close();
   }

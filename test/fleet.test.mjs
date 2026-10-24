@@ -38,6 +38,32 @@ test("a missing AHP token cannot create an endlessly reconnecting host", async (
   assert.equal(added, 0);
 });
 
+test("corrected credentials replace a failed host but never disrupt a connected host", async () => {
+  const operations = [];
+  let host = { id: "v-arch", state: { status: "reconnecting" } };
+  const multi = {
+    host: () => host,
+    removeHost: async () => { operations.push("remove"); host = null; },
+    addHost: async ({ id, label }) => {
+      operations.push("add");
+      host = { id, label, state: { status: "connecting" } };
+    },
+    events: async function* () {},
+    hostEvents: async function* () {},
+  };
+  const fleet = new Fleet(() => {}, multi);
+  fleet.trusted.set("v-arch", new Set(["file:///old/connection"]));
+  await fleet.addHost({ label: "v-arch", endpoint: "ws://127.0.0.1:9187", token: "new-token" });
+  assert.deepEqual(operations, ["remove", "add"]);
+  assert.equal(fleet.trusted.has("v-arch"), false, "Old connection trust must not transfer");
+  assert.equal(host.id, "v-arch");
+  host.state.status = "connected";
+  await assert.rejects(fleet.addHost({
+    label: "v-arch", endpoint: "ws://127.0.0.1:9187", token: "another-token",
+  }), /already connected/);
+  assert.deepEqual(operations, ["remove", "add"], "A connected host must not be replaced");
+});
+
 test("workspace identifiers are absolute file URIs, not host-relative paths", () => {
   assert.equal(workspaceUri(""), undefined);
   assert.equal(workspaceUri("file:///home/user/workspace/Relay"), "file:///home/user/workspace/Relay");

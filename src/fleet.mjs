@@ -253,9 +253,15 @@ export class Fleet {
     const url = safeEndpoint(endpoint);
     const id = label.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
     if (!id) throw Error("Host name is required");
-    if (this.multi.host(id)) throw Error("Host name is already in use");
     const credential = String(token || "").trim();
     if (!credential) throw Error("An AHP host access token is required");
+    const existing = this.multi.host(id);
+    if (existing?.state.status === "connected") {
+      throw Error("Host is already connected. Select it, or remove it to change its endpoint.");
+    }
+    // A failed/reconnecting host cannot authenticate using newly entered
+    // credentials. Replace its connection rather than rejecting the same name.
+    if (existing) await this.removeHost(id);
     // The secret lives exclusively in this closure and is never persisted or rendered.
     url.searchParams.set("tkn", credential);
     await this.multi.addHost({
