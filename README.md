@@ -49,6 +49,10 @@ ahpd status
 Configure the ACP plugin with only the agents you need. Each must have a
 working native ACP command and credentials. For example, OpenCode exposes
 `opencode acp`; Hermes exposes `hermes acp`.
+With OpenCode 2.1.4, configure the native ACP sign-in explicitly as
+`plugins[].options.presets.opencode.authenticate: { "methodId": "opencode-login" }`;
+authentication and model usage limits are separate. This was qualified
+against `@ahpd/agent-acp@0.13.0` using a free OpenCode model.
 
 In Relay, enter the host endpoint (`ws://127.0.0.1:9187`) and its access
 token. Host discovery and sessions appear when the AHP handshake succeeds.
