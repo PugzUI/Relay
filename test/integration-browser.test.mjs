@@ -33,6 +33,7 @@ test("browser runs ACP turns, approvals, cancel, two hosts and restart boundarie
       await page.locator(".sessions-panel button.primary").click();
       await page.locator('.create-form input[name="directory"]')
         .fill(pathToFileURL(host.workspace).href);
+      await page.locator('.workspace-trust input[name="trustWorkspace"]').check();
       await page.locator(".create-form button.primary").click();
       await page.locator(".composer textarea").waitFor({ state: "visible" });
       await page.waitForFunction((hostId) => {

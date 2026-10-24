@@ -35,6 +35,13 @@ test("two real ahpd hosts keep equal session URIs and turns isolated", { timeout
           `${host.origin}/?tkn=${encodeURIComponent(host.token)}`),
       });
       await waitForConnected(multi, id);
+      // Exercise real ahpd's workspace-trust gate; no fixture bypass.
+      multi.dispatch(id, "ahp-root://", {
+        type: "root/configChanged",
+        config: { workspaceTrust: {
+          enabled: true, trustedUris: [pathToFileURL(host.workspace).href],
+        } },
+      });
       await multi.client(id).request("createSession", {
         channel,
         provider: "relayFixture",

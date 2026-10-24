@@ -110,7 +110,6 @@ async function isolatedHost(root, name, origin) {
             name: "Relay ACP Fixture",
             command: process.execPath,
             args: [fakeAcp],
-            honoursTrust: true,
           },
         },
       },

@@ -1,0 +1,18 @@
+[Unit]
+Description=Relay AHP Fleet Console
+After=network.target ahpd.service
+Wants=ahpd.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/Relay
+ExecStart=/usr/bin/node %h/workspace/Relay/src/serve.mjs
+Environment=PORT=4200
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

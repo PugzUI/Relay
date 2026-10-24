@@ -18,6 +18,19 @@ npm start
 Open http://127.0.0.1:4200 and connect an AHP host. The console binds to
 loopback only. It can connect to any number of authorized AHP hosts.
 
+To keep Relay running on the local Arch Linux workstation under the user
+systemd manager, link the repository's unit (requires this checkout at
+`~/workspace/Relay`) and enable it:
+
+```sh
+systemctl --user link ~/workspace/Relay/deploy/relay.service
+systemctl --user enable --now relay.service
+systemctl --user status relay.service
+```
+
+The frontend remains stateless and loopback-only; user lingering lets its
+systemd unit run after reboot without logging into the desktop.
+
 ## Run the agent host
 
 An AHP 1.0 server such as [ahpd](https://github.com/softov/ahpd) owns agent
@@ -28,6 +41,7 @@ agent backends, then run it under its built-in user systemd unit:
 npm install --global @ahpd/server@0.13.0
 ahpd configure
 ahpd plugin install @ahpd/agent-acp@0.13.0
+npm install --prefix ~/.config/ahpd --save-exact zod@4.6.7
 ahpd service install
 ahpd status
 ```
@@ -41,6 +55,13 @@ token. Host discovery and sessions appear when the AHP handshake succeeds.
 For a remote host, use `wss://` with authenticated, encrypted transport.
 Host connections exist only in the current browser page; a full reload requires
 reconnecting, but sessions and work remain owned by the host.
+
+When creating a session, explicitly opt in to **Trust this workspace** only
+for a repository whose project instructions and hooks you accept. Relay sends
+the native `root/configChanged` / `workspaceTrust` action to the owning
+AHP host. The grant is scoped to this host connection and re-sent after
+reconnection, but never persisted by Relay. Untrusted project hooks are not
+allowed to run implicitly.
 
 **Security:** The AHP WebSocket browser transport conveys the host token as a
 `tkn` query parameter because browsers cannot set a WebSocket Authorization
@@ -94,6 +115,16 @@ ahpc --host ws://127.0.0.1:9187 \
 
 This connects ChatGPT to the exact same host sessions; Relay needs no
 Executor-specific backend, REST API, or GraphQL server.
+
+For an Executor MCP client authorized to work in the Relay checkout, place a
+scoped `trust` list in `~/.config/ahpc/config.json`:
+`{ "trust": ["/home/user/workspace/Relay"] }`. Do not trust an entire
+home directory for convenience.
+
+In `@ahpd/agent-acp@0.13.0`, the ACP SDK's required `zod` peer dependency
+is not installed automatically by `ahpd plugin install`. The pinned
+`zod@4.6.7` installation above prevents the host from failing at startup
+with `Cannot find package 'zod'`.
 
 ## Scope
 

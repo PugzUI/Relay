@@ -136,6 +136,9 @@ export class Fleet {
     this.selected = null;
     this.slots = { session: null, chat: null, changes: null };
     this.waiting = new Map();
+    // AHP workspace trust is deliberately scoped to this browser tab and each
+    // host connection. Never infer it from the workspace path or persist it.
+    this.trusted = new Map();
     this.lastSignal = null;
     this.error = "";
     this.sequence = 0;
@@ -265,7 +268,31 @@ export class Fleet {
   async removeHost(id) {
     if (this.selected?.hostId === id) await this.select(null);
     await this.multi.removeHost(id);
+    this.trusted.delete(id);
     this.changed();
+  }
+
+  trustWorkspace(hostId, directory) {
+    const uri = workspaceUri(directory || "");
+    if (!uri) throw Error("Select a workspace before trusting its project files");
+    this.requireHost(hostId);
+    const previous = this.trusted.get(hostId) || new Set();
+    const next = new Set(previous);
+    next.add(uri);
+    this.trusted.set(hostId, next);
+    this.publishTrust(hostId);
+  }
+
+  publishTrust(hostId) {
+    const uris = [...(this.trusted.get(hostId) || [])];
+    if (!uris.length) return;
+    this.requireHost(hostId);
+    // The AHP host interprets workspaceTrust on the root channel per client
+    // connection. It discards that grant at disconnect; it is not host policy.
+    this.multi.dispatch(hostId, "ahp-root://", {
+      type: "root/configChanged",
+      config: { workspaceTrust: { enabled: true, trustedUris: uris } },
+    });
   }
 
   async reconnect(id) {
@@ -495,6 +522,14 @@ export class Fleet {
     })();
     try {
       for await (const event of this.multi.hostEvents()) {
+        if (event.type === "connected" && this.trusted.has(event.hostId)) {
+          try {
+            this.publishTrust(event.hostId);
+          } catch (error) {
+            this.error = "Could not restore workspace trust: " +
+              (error?.message || String(error));
+          }
+        }
         if (event.type === "connected" && this.selected?.hostId === event.hostId) {
           const target = this.selected;
           // Re-seed from authoritative snapshots after reconnect; cached state is stale.
@@ -548,12 +583,13 @@ export class Fleet {
     });
   }
 
-  async createSession({ hostId, provider, directory, config }) {
+  async createSession({ hostId, provider, directory, config, trust = false }) {
     const client = this.requireHost(hostId);
     if (!this.multi.host(hostId)?.agents.some((agent) => agent.provider === provider)) {
       throw Error("Provider is not advertised by the selected host");
     }
     const dir = workspaceUri(directory || "");
+    if (trust) this.trustWorkspace(hostId, directory);
     // ahpd keeps sessions under the provider-qualified canonical URI. Sending
     // an ahp-session alias works but creates a second URI absent from its root
     // catalog; use the canonical spelling from the outset when URI-safe.

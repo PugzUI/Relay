@@ -323,6 +323,36 @@ test("unavailable hosts cannot receive actions regardless of cached state", () =
   assert.equal(fleet.waiting.size, 0, "A rejected local dispatch leaves no phantom queued turn");
 });
 
+test("workspace trust is explicit, host-scoped, and sent through native AHP root state", async () => {
+  const { fleet, operations } = fakeFleet();
+  const a = "file:///home/user/workspace/Relay";
+  const b = "file:///home/user/workspace/another";
+  fleet.select = async () => {};
+  await fleet.createSession({ hostId: "a", provider: "fixture", directory: a });
+  assert.equal(operations.length, 1);
+  assert.equal(operations[0].method, "createSession");
+  operations.length = 0;
+  await fleet.createSession({ hostId: "a", provider: "fixture", directory: a, trust: true });
+  assert.equal(operations[0].channel, "ahp-root://");
+  assert.equal(operations[0].action.type, "root/configChanged");
+  assert.equal(operations[1].method, "createSession");
+  operations.length = 0;
+  // The host must receive exactly the directories explicitly approved by the operator.
+  fleet.trustWorkspace("a", a);
+  fleet.trustWorkspace("a", a);
+  fleet.trustWorkspace("a", b);
+  assert.deepEqual(operations.slice(-1)[0], {
+    hostId: "a", channel: "ahp-root://",
+    action: { type: "root/configChanged", config: {
+      workspaceTrust: { enabled: true, trustedUris: [a, b] },
+    } },
+  });
+  assert.equal(fleet.trusted.get("a").size, 2);
+  fleet.multi.host().state.status = "reconnecting";
+  assert.throws(() => fleet.trustWorkspace("a", "file:///tmp/unsafe"), /not connected/);
+  assert.equal(fleet.trusted.get("a").size, 2);
+});
+
 test("created sessions use the same canonical provider URI as ahpd's root catalog", async () => {
   const { fleet, operations } = fakeFleet();
   let selected;

@@ -367,6 +367,7 @@ export class RelayFleet extends LitElement {
       const hostId = this.activeHost;
       const provider = String(data.get("provider") || "");
       const directory = String(data.get("directory") || "");
+      const trust = data.get("trustWorkspace") === "on";
       const key = JSON.stringify([hostId, provider, directory]);
       let config;
       if (this.sessionConfig && this.sessionConfigKey === key) {
@@ -387,7 +388,7 @@ export class RelayFleet extends LitElement {
         throw Error("Complete the host-required session options");
       }
       await this.fleet.createSession({
-        hostId, provider, directory, ...(config ? { config } : {}),
+        hostId, provider, directory, trust, ...(config ? { config } : {}),
       });
       this.modelId = "";
       this.sessionConfig = null;
@@ -650,6 +651,11 @@ export class RelayFleet extends LitElement {
                 </select></label>
                 <label>Workspace (file URI)<input name="directory" type="text" spellcheck="false" placeholder="file:///home/user/workspace/project" .value=${activeHost.defaultDirectory || ""}></label>
                 <button class="primary" ?disabled=${this.busy || !activeHost.agents.length}>Create session</button>
+                <label class="workspace-trust"><input type="checkbox" name="trustWorkspace">
+                  <span><strong>Trust this workspace for this browser tab</strong>
+                    <small>Allow this ACP agent to load repository instructions and hooks. Only select for projects you trust.</small>
+                  </span>
+                </label>
                 ${activeHost.agents.length ? html`<div class="host-options">
                   <div class="section-label">HOST SESSION OPTIONS
                     <button class="quiet small" type="button" ?disabled=${this.busy}
